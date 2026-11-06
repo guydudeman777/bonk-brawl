@@ -21,7 +21,17 @@ Live: https://bonk-brawl.bonkbrawl.workers.dev
 
 - **Classic**: win by knockout or by knocking your rival off the mat. Knockback grows with damage taken.
 - **Knockout only**: a roped ring, so the only way to win is a K.O.
-- Solo against a CPU or a training dummy, or 1v1 online with a 4-letter room code.
+- Solo against a CPU, 2v2 with a CPU partner, or against a training dummy.
+
+## Online formats
+
+The host picks a format and shares a 4-letter room code. Friends take seats in the order they join; CPUs fill empty seats, and anyone who joins a full match watches until a seat opens.
+
+- **1v1**: you against one friend.
+- **Team battle**: 2v2 for up to 4 players.
+- **Co-op vs CPU**: you and a friend on red against two CPUs.
+
+In 2v2 there is no friendly fire: teammates can bump each other, but hits and grabs only work on the other team. A fighter who is knocked out or rung out sits out the rest of the round, and a team wins the round when the whole other team is down.
 
 ## Customization
 

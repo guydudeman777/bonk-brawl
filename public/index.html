@@ -25,6 +25,12 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--bg);color:var(--
   padding:calc(12px + env(safe-area-inset-top,0px)) max(16px,env(safe-area-inset-right,0px)) 0 max(16px,env(safe-area-inset-left,0px));pointer-events:none}
 .side{display:flex;flex-direction:column;gap:6px;min-width:0}
 .side.b{align-items:flex-end}
+.frow{display:flex;flex-direction:column;gap:5px;width:100%;min-width:0}
+.side.b .frow{align-items:flex-end}
+.side{gap:10px}
+#hud.four .hp{height:10px}
+#hud.four .tag{font-size:11px}
+#hud.four ~ #menuBtn{top:calc(108px + env(safe-area-inset-top,0px))}
 .tag{font-family:var(--display);font-size:13px;letter-spacing:.06em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
 .side.a .tag{color:var(--red)} .side.b .tag{color:var(--blue)}
 .hp{width:min(340px,100%);height:14px;background:rgba(0,0,0,.45);border:2px solid var(--line);border-radius:3px;overflow:hidden}
@@ -95,11 +101,9 @@ input{font:600 16px var(--mono);letter-spacing:.2em;text-transform:uppercase;wid
 <div id="stage"></div>
 
 <div id="hud">
-  <div class="side a"><div class="tag" id="tagA">RED</div><div class="hp"><i id="hpA"></i></div>
-    <div class="hold" id="holdA" hidden><span>GRIP</span><div class="mini"><i id="gripA"></i></div><span>TAKEDOWN</span><div class="mini pull"><i id="pullA"></i></div></div></div>
+  <div class="side a" id="sideA"></div>
   <div><div id="score">0 – 0</div><div id="modeTag">CLASSIC</div></div>
-  <div class="side b"><div class="tag" id="tagB">BLUE</div><div class="hp"><i id="hpB"></i></div>
-    <div class="hold" id="holdB" hidden><span>GRIP</span><div class="mini"><i id="gripB"></i></div><span>TAKEDOWN</span><div class="mini pull"><i id="pullB"></i></div></div></div>
+  <div class="side b" id="sideB"></div>
 </div>
 <div id="banner"></div>
 <div id="sub"></div>
@@ -143,10 +147,15 @@ input{font:600 16px var(--mono);letter-spacing:.2em;text-transform:uppercase;wid
     </div>
     <div class="grp">
       <h2>Solo</h2>
-      <div class="row"><button class="go" id="bCpu">Fight the CPU</button><button id="bDummy">Training dummy</button></div>
+      <div class="row"><button class="go" id="bCpu">Fight the CPU</button><button id="bDuo">2v2 with a CPU partner</button><button id="bDummy">Training dummy</button></div>
     </div>
     <div class="grp">
       <h2>Online 1v1</h2>
+      <div class="row seg" role="group" aria-label="Online format">
+        <button id="fm1v1" aria-pressed="true"><b>1v1</b><span>You against one friend</span></button>
+        <button id="fmTeam" aria-pressed="false"><b>Team battle</b><span>2v2, up to 4 friends; CPUs fill empty seats</span></button>
+        <button id="fmCoop" aria-pressed="false"><b>Co-op vs CPU</b><span>You and a friend against two CPUs</span></button>
+      </div>
       <div class="row"><button id="bHost">Host a match</button></div>
       <div class="row" style="align-items:center"><label for="codeIn" class="note">Code</label><input id="codeIn" maxlength="4" autocomplete="off" spellcheck="false" placeholder="ABCD"><button id="bJoin">Join</button></div>
       <p class="note" id="netNote">Checking whether online play is available…</p>
@@ -261,31 +270,31 @@ const along = (p, d, len) => [p[0] + d[0]*len, p[1] + d[1]*len, p[2] + d[2]*len]
 
 class Fighter {
   constructor(idx) {
-    this.idx = idx;
-    const group = idx === 0 ? 2 : 4, mask = 1 | (idx === 0 ? 4 : 2);
+    this.idx = idx; this.team = idx % 2;
+    // One collision bit per fighter: everyone collides with the mat and with every other fighter, teammates included, but not themselves.
+    const group = 2 << idx, mask = 1 | (30 & ~group);
+    this.joints = []; this.active = false; this.out = false;
     const T = this.torso = new CANNON.Body({ mass: 10, angularDamping: 0.5, linearDamping: 0.05 });
     T.addShape(new CANNON.Box(new CANNON.Vec3(0.3,0.4,0.17)));
     T.addShape(new CANNON.Sphere(0.23), new CANNON.Vec3(0,0.66,0));
     T.collisionFilterGroup = group; T.collisionFilterMask = mask; T.fighter = this;
-    world.addBody(T);
     this.all = [T];
     this.mass = 10;
     const segment = (len, m) => {
       const b = new CANNON.Body({ mass: m, angularDamping: 0.8, linearDamping: 0.05 });
       b.addShape(new CANNON.Box(new CANNON.Vec3(0.07, len/2, 0.07)));
       b.collisionFilterGroup = group; b.collisionFilterMask = mask; b.fighter = this;
-      world.addBody(b);
       return b;
     };
     this.limbs = LIMBS.map(def => {
       const ub = segment(def.up, def.mu), lb = segment(def.lo, def.ml);
-      world.addConstraint(new CANNON.PointToPointConstraint(T, new CANNON.Vec3(...def.pivot), ub, new CANNON.Vec3(0, def.up/2, 0)));
-      world.addConstraint(new CANNON.PointToPointConstraint(ub, new CANNON.Vec3(0, -def.up/2, 0), lb, new CANNON.Vec3(0, def.lo/2, 0)));
+      this.joints.push(new CANNON.PointToPointConstraint(T, new CANNON.Vec3(...def.pivot), ub, new CANNON.Vec3(0, def.up/2, 0)));
+      this.joints.push(new CANNON.PointToPointConstraint(ub, new CANNON.Vec3(0, -def.up/2, 0), lb, new CANNON.Vec3(0, def.lo/2, 0)));
       const L = { ...def, upper:ub, lower:lb, uTip:new CANNON.Vec3(0,-def.up/2,0), lTip:new CANNON.Vec3(0,-def.lo/2,0), striking:false, cool:0, heldT:0 };
       const onCollide = e => {
         if (!L.striking || L.cool > 0 || this.ko) return;
         const of = e.body.fighter;
-        if (!of || of === this) return;
+        if (!of || of.team === this.team) return;
         const v = Math.abs(e.contact.getImpactVelocityAlongNormal());
         if (v < 2.2) return;
         const c = e.contact;
@@ -304,6 +313,17 @@ class Fighter {
     this.grab = null;
     this.power = 1; this.speed = 1;
   }
+  // Fighters not in the current lineup, or rung out mid-round, are taken out of the physics world entirely.
+  activate() {
+    if (this.active) return;
+    this.all.forEach(b => world.addBody(b)); this.joints.forEach(c => world.addConstraint(c));
+    this.active = true;
+  }
+  deactivate() {
+    if (!this.active) return;
+    this.all.forEach(b => world.removeBody(b)); this.joints.forEach(c => world.removeConstraint(c));
+    this.active = false;
+  }
   reset(x, z, yaw) {
     const T = this.torso;
     T.position.set(x, STAND, z);
@@ -315,7 +335,7 @@ class Fighter {
       L.heldT = 0;
     }
     for (const b of this.all) { b.velocity.set(0,0,0); b.angularVelocity.set(0,0,0); b.force.set(0,0,0); b.torque.set(0,0,0); }
-    this.hp = 100; this.ko = false; this.stun = 0; this.downed = 0; this.grabCool = 0; this.reachT = 0;
+    this.hp = 100; this.ko = false; this.out = false; this.stun = 0; this.downed = 0; this.grabCool = 0; this.reachT = 0;
   }
   step(inp, dt) {
     const T = this.torso;
@@ -411,7 +431,8 @@ class Fighter {
     b.torque.x += 12 * c.x; b.torque.y += 12 * c.y; b.torque.z += 12 * c.z;
   }
 }
-const F = [new Fighter(0), new Fighter(1)];
+const F = [0, 1, 2, 3].map(i => new Fighter(i));
+const alive = f => f.active && !f.out && !f.ko;
 
 // ---------- rendering ----------
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -504,7 +525,7 @@ function randomLook() {
 // Visual-only: physics stays the simple box-and-stick rig, so these meshes must keep the same pivots and lengths.
 function fighterMeshes(idx, look) {
   const M = (color, rough = 0.6, extra) => new THREE.MeshStandardMaterial({ color, roughness: rough, ...extra });
-  const race = look.race, team = TEAMS[idx];
+  const race = look.race, team = TEAMS[idx % 2];
   const skin = M(RACES[race].skins[look.skin], race === 'beast' ? 0.95 : 0.55), shirt = M(team.team, 0.7), shorts = M(team.shorts, 0.8);
   const hairCol = HAIR_COLORS[look.hc], hair = M(hairCol, 0.9);
   const glove = M(team.team, 0.35), shoe = M(0x22252e, 0.5), sock = M(0xf1ede4, 0.9), white = M(0xffffff, 0.3), ink = M(0x16181d, 0.3);
@@ -526,7 +547,8 @@ function fighterMeshes(idx, look) {
   const hips = seg(torso, 0.24 * B.gut, 0.23, -0.24, -0.44, shorts); hips.scale.z = 0.75;
   add(torso, ball(0.12 * B.limb * bulk), shirt, 0.3, 0.3, 0);
   add(torso, ball(0.12 * B.limb * bulk), shirt, -0.3, 0.3, 0);
-  add(torso, new THREE.BoxGeometry(0.06, 0.2, 0.02), M(0xf3efe6, 0.8), 0, 0.15, 0.19 * Math.max(1, B.w * 0.98), false);
+  // Chest number tells teammates apart: one bar for the first fighter on a team, two for the second.
+  for (const x of idx < 2 ? [0] : [-0.045, 0.045]) add(torso, new THREE.BoxGeometry(0.05, 0.2, 0.02), M(0xf3efe6, 0.8), x, 0.15, 0.19 * Math.max(1, B.w * 0.98), false);
   seg(torso, 0.07 * (race === 'alien' ? 0.7 : B.limb), 0.08 * B.limb, 0.5, 0.38, skin);
 
   // Head: aliens get a tall cranium, beasts a broader skull.
@@ -626,7 +648,7 @@ function fighterMeshes(idx, look) {
   parts.forEach(p => scene.add(p));
   return parts;
 }
-const meshes = new Array(PER * 2);
+const meshes = new Array(PER * 4);
 function disposeTree(o) { o.traverse(c => { if (c.geometry) c.geometry.dispose(); if (c.material) c.material.dispose(); }); }
 // Rebuilds one fighter's meshes and applies its race stats; physics bodies are untouched.
 function dress(i, look) {
@@ -635,12 +657,12 @@ function dress(i, look) {
   for (let k = 0; k < PER; k++) { const m = meshes[i * PER + k]; if (m) { scene.remove(m); disposeTree(m); } }
   fighterMeshes(i, look).forEach((m, k) => { meshes[i * PER + k] = m; });
 }
-const allBodies = [...F[0].all, ...F[1].all];
+const allBodies = F.flatMap(f => f.all);
 let myLook = (() => {
   try { const v = JSON.parse(localStorage.getItem('bonk-look')); if (v) return cleanLook(v); } catch (e) {}
   return cleanLook({ race:'human', body:'average', hair:'short', beard:'none', skin:1, hc:1 });
 })();
-dress(0, myLook); dress(1, randomLook());
+F.forEach((f, i) => dress(i, i === 0 ? myLook : randomLook()));
 
 const sparks = [];
 const sparkGeo = new THREE.SphereGeometry(0.2, 12, 8);
@@ -678,28 +700,59 @@ addEventListener('keydown', e => {
 });
 addEventListener('keyup', e => { keys[e.code] = false; });
 addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
-const localYaw = [0, Math.PI];
+const localYaw = [0, Math.PI, 0, Math.PI];
 let camPitch = 0.38;
 function keyInput(idx) {
-  return { fw:keys.KeyW, bk:keys.KeyS, la:keys.KeyQ, ra:keys.KeyE, ll:keys.KeyA, rl:keys.KeyD, gr:keys.KeyX, pd:keys.KeyZ, yaw:localYaw[idx] };
+  return { fw:keys.KeyW, bk:keys.KeyS, la:keys.KeyQ, ra:keys.KeyE, ll:keys.KeyA, rl:keys.KeyD, gr:keys.KeyX, pd:keys.KeyZ, yaw:idx >= 0 ? localYaw[idx] : 0 };
 }
 const BITS = ['fw','bk','la','ra','ll','rl','gr','pd'];
 const encodeInput = inp => BITS.reduce((m, k, i) => m | (inp[k] ? 1 << i : 0), 0);
 function decodeInput(o) {
-  const inp = { yaw: typeof o?.y === 'number' ? o.y : Math.PI };
+  const inp = { yaw: typeof o?.y === 'number' ? o.y : 0 };
   const k = typeof o?.k === 'number' ? o.k : 0;
   BITS.forEach((b, i) => { inp[b] = !!(k & (1 << i)); });
   return inp;
 }
 
+// ---------- lineup ----------
+// Slot i is on team i % 2 (0 red, 1 blue); 1v1 uses slots 0-1, 2v2 uses 0-3.
+// ctl per slot: local (this keyboard), cpu, dummy, seat (an online friend, or a stand-in while the seat is empty), net (guest view).
+const roster = { n:2, ctl:['cpu','cpu'] };
+let format = '1v1';
+const seats = {};
+const lineup = () => F.slice(0, roster.n);
+function spawnOf(i) {
+  const blue = i % 2 === 1, x = roster.n === 4 ? (i < 2 ? -1.3 : 1.3) * (blue ? -1 : 1) : 0;
+  return { x, z: blue ? 2.5 : -2.5, yaw: blue ? Math.PI : 0 };
+}
+function setRoster(ctl) {
+  roster.ctl = ctl; roster.n = ctl.length;
+  F.forEach((f, i) => {
+    if (i >= roster.n) { for (const g of F) if (g.grab && (g === f || g.grab.body.fighter === f)) releaseGrab(g, 0); f.deactivate(); }
+    for (let k = 0; k < PER; k++) meshes[i * PER + k].visible = i < roster.n;
+  });
+  buildHud();
+}
+const enemiesOf = A => lineup().filter(f => f.team !== A.team && alive(f));
+function nearestEnemy(i) {
+  const me = F[i].torso.position;
+  let best = null, bd = Infinity;
+  for (const f of enemiesOf(F[i])) { const d = Math.hypot(f.torso.position.x - me.x, f.torso.position.z - me.z); if (d < bd) { bd = d; best = f; } }
+  return best;
+}
+const heldBy = f => lineup().find(a => a.grab && a.grab.body.fighter === f);
+
 // ---------- CPU ----------
-const ai = [0, Math.PI].map(yaw => ({ yaw, t:1, hold:0, key:null, grabT:0, grabLen:0, letGo:0, takedown:false, mashT:0, mashOn:false, mashKey:'la' }));
+const ai = [0, Math.PI, 0, Math.PI].map(yaw => ({ yaw, t:1, hold:0, key:null, grabT:0, grabLen:0, letGo:0, takedown:false, mashT:0, mashOn:false, mashKey:'la' }));
 function aiInput(i, dt) {
-  const s = ai[i], me = F[i].torso.position, op = F[1-i].torso.position;
-  s.yaw = wrap(s.yaw + clamp(wrap(Math.atan2(op.x - me.x, op.z - me.z) - s.yaw), -3*dt, 3*dt));
-  const dist = Math.hypot(op.x - me.x, op.z - me.z);
+  const s = ai[i], tgt = nearestEnemy(i);
   const inp = { yaw: s.yaw };
-  if (F[1-i].grab) {
+  if (!tgt) return inp;
+  const me = F[i].torso.position, op = tgt.torso.position;
+  s.yaw = wrap(s.yaw + clamp(wrap(Math.atan2(op.x - me.x, op.z - me.z) - s.yaw), -3*dt, 3*dt));
+  inp.yaw = s.yaw;
+  const dist = Math.hypot(op.x - me.x, op.z - me.z);
+  if (heldBy(F[i])) {
     // About two presses a second: a human grabber can still land a takedown if they commit to it quickly.
     s.mashT -= dt;
     if (s.mashT <= 0) { s.mashOn = !s.mashOn; s.mashT = 0.15 + Math.random() * 0.2; if (s.mashOn) s.mashKey = ['la','ra','ll','rl'][Math.floor(Math.random() * 4)]; }
@@ -726,24 +779,40 @@ function aiInput(i, dt) {
   return inp;
 }
 function idleInput(i) {
-  const me = F[i].torso.position, op = F[1-i].torso.position;
-  return { yaw: Math.atan2(op.x - me.x, op.z - me.z) };
+  const tgt = nearestEnemy(i);
+  if (!tgt) return { yaw: ai[i].yaw };
+  const me = F[i].torso.position, op = tgt.torso.position;
+  return { yaw: ai[i].yaw = Math.atan2(op.x - me.x, op.z - me.z) };
 }
 
 // ---------- match ----------
-// mode: attract (CPU vs CPU behind the menu) | cpu | dummy | host | guest
+// mode: attract (CPU vs CPU behind the menu) | solo | host | guest
 let mode = 'attract', localIdx = 0;
-const match = { status:'ready', timer:1.2, msg:'', sub:'', score:[0,0], round:1, hits:0, hit:[0,0,0] };
+const match = { status:'ready', timer:1.2, msg:'', score:[0,0], round:1, hits:0, hit:[0,0,0], reason:'K.O.' };
 function resetRound() {
-  releaseGrab(F[0], 0); releaseGrab(F[1], 0);
-  F[0].reset(0, -2.5, 0); F[1].reset(0, 2.5, Math.PI);
-  localYaw[0] = 0; localYaw[1] = Math.PI; ai[0].yaw = 0; ai[1].yaw = Math.PI;
+  for (const f of F) releaseGrab(f, 0);
+  F.forEach((f, i) => {
+    if (i >= roster.n) { f.deactivate(); return; }
+    const s = spawnOf(i);
+    f.activate(); f.reset(s.x, s.z, s.yaw);
+    localYaw[i] = s.yaw; ai[i].yaw = s.yaw;
+  });
   match.status = 'ready'; match.timer = 1.2; match.msg = 'ROUND ' + match.round;
 }
 function newMatch() { match.score = [0,0]; match.round = 1; resetRound(); }
 function endRound(winner, why) {
   match.status = 'end'; match.timer = 3; match.score[winner]++; match.round++;
-  match.msg = why;
+  match.msg = roster.n === 4 ? (winner === 0 ? 'RED' : 'BLUE') + ' WINS' : why;
+}
+// In 2v2 a fighter who is knocked out or rung out sits out the rest of the round; the round ends when a whole team is down.
+function eliminated(f, why) {
+  match.reason = why;
+  if (roster.n === 4 && lineup().some(g => g.team === f.team && alive(g))) { match.msg = why; match.timer = 0.9; }
+}
+function ringOut(f) {
+  for (const g of F) if (g.grab && (g === f || g.grab.body.fighter === f)) releaseGrab(g, 0.3);
+  f.out = true; f.deactivate();
+  eliminated(f, 'RING OUT');
 }
 function tickMatch(dt) {
   if (match.status === 'ready') {
@@ -751,20 +820,18 @@ function tickMatch(dt) {
     if (match.timer <= 0) { match.status = 'fight'; match.msg = 'FIGHT'; match.timer = 0.7; }
   } else if (match.status === 'fight') {
     if (match.timer > 0) { match.timer -= dt; if (match.timer <= 0) match.msg = ''; }
-    for (const i of [0,1]) if (F[i].torso.position.y < -3) {
-      if (gameMode === 'ko') { resetRound(); return; }
-      return endRound(1 - i, 'RING OUT');
-    }
-    for (const i of [0,1]) if (F[i].ko) return endRound(1 - i, 'K.O.');
+    for (const f of lineup()) if (f.active && !f.out && f.torso.position.y < -3) ringOut(f);
+    for (const t of [0, 1]) if (!lineup().some(f => f.team === t && alive(f))) return endRound(1 - t, match.reason);
   } else if (match.status === 'end') {
     match.timer -= dt;
     if (match.timer <= 0) resetRound();
   }
 }
+function knockOut(D) { D.ko = true; eliminated(D, 'K.O.'); }
 function resolveHits() {
   for (const h of hits) {
     const D = h.def, A = h.att;
-    if (D.ko || match.status !== 'fight') continue;
+    if (!alive(D) || A.team === D.team || match.status !== 'fight') continue;
     const isTorso = h.body === D.torso;
     const head = isTorso && h.y > D.torso.position.y + 0.45;
     const dmg = Math.min(20, (h.v - 1.5) * 2.2) * (head ? 1.5 : isTorso ? 1 : 0.35) * (h.limb.arm ? 1 : 1.25) * A.power;
@@ -775,17 +842,18 @@ function resolveHits() {
     // Knockback grows with damage already taken, so beaten fighters fly off the mat.
     const mag = (dmg * 4 + 12) * (gameMode === 'ko' ? 1 : 1 + (100 - D.hp) / 70);
     D.torso.applyImpulse(new CANNON.Vec3(dx/n*mag, dmg*2, dz/n*mag), D.torso.position);
-    if (D.hp <= 0) D.ko = true;
+    if (D.hp <= 0) knockOut(D);
     match.hits++; match.hit = [h.x, h.y, h.z]; match.hitBig = head || dmg > 12;
     spark(h.x, h.y, h.z, match.hitBig); thump(dmg);
   }
   hits.length = 0;
 }
+
 // ---------- grappling ----------
 const GRAB_REACH = 0.16, STRUGGLE_KEYS = ['la','ra','ll','rl'];
-let prevInputs = [{}, {}];
+let prevInputs = [{}, {}, {}, {}];
 function tryGrab(A, D) {
-  if (A.grab || A.grabCool > 0 || A.ko || A.downed > 0 || D.ko) return;
+  if (A.grab || A.grabCool > 0 || !alive(A) || A.downed > 0 || !alive(D)) return;
   for (const L of A.limbs) {
     if (!L.arm) continue;
     const tip = L.lower.pointToWorldFrame(L.lTip);
@@ -811,28 +879,28 @@ function takedown(A, D) {
   releaseGrab(A, 1);
   D.downed = 1.6; D.stun = Math.max(D.stun, 1.6);
   D.hp = Math.max(0, D.hp - 8);
-  if (D.hp <= 0) D.ko = true;
+  if (D.hp <= 0) knockOut(D);
   const tp = D.torso.position, dx = A.torso.position.x - tp.x, dz = A.torso.position.z - tp.z, n = Math.hypot(dx, dz) || 1;
   // Pushing the head toward the grabber and the hips away tips the body over instead of just dropping it straight down.
   D.torso.applyImpulse(new CANNON.Vec3(dx/n*45, -50, dz/n*45), new CANNON.Vec3(tp.x, tp.y + 0.6, tp.z));
   match.hits++; match.hit = [tp.x, tp.y, tp.z]; match.hitBig = true;
   spark(tp.x, tp.y, tp.z, true); thump(18);
-  match.msg = 'TAKEDOWN'; match.timer = 0.9;
+  if (!D.ko) { match.msg = 'TAKEDOWN'; match.timer = 0.9; }
 }
 // Runs before the physics step so the pull-down forces are integrated this frame.
 function grapple(inputs, dt) {
-  for (const i of [0,1]) {
-    const A = F[i], D = F[1-i], inp = inputs[i], dInp = inputs[1-i], prev = prevInputs[1-i];
-    if (match.status !== 'fight') { releaseGrab(A, 0); A.reachT = 0; continue; }
+  for (let i = 0; i < roster.n; i++) {
+    const A = F[i], inp = inputs[i];
+    if (match.status !== 'fight' || !alive(A)) { releaseGrab(A, 0); A.reachT = 0; continue; }
     // X toggles: a tap reaches out briefly to latch on, and a tap while holding lets go.
     const tap = inp.gr && !prevInputs[i].gr;
     if (A.grab && tap) { releaseGrab(A, 0.3); continue; }
     if (!A.grab) {
       if (tap && A.grabCool <= 0) A.reachT = 0.6;
-      if (A.reachT > 0) { tryGrab(A, D); if (A.grab) A.reachT = 0; }
+      if (A.reachT > 0) { for (const D of enemiesOf(A)) { tryGrab(A, D); if (A.grab) { A.reachT = 0; break; } } }
       continue;
     }
-    const g = A.grab;
+    const g = A.grab, D = g.body.fighter, dInp = inputs[D.idx], prev = prevInputs[D.idx];
     let presses = 0;
     for (const k of STRUGGLE_KEYS) if (dInp[k] && !prev[k]) presses++;
     // A stronger fighter both holds on harder and struggles harder.
@@ -845,30 +913,34 @@ function grapple(inputs, dt) {
       D.torso.force.y -= D.mass * GRAV * 0.5;
     } else g.pull = Math.max(0, g.pull - dt * 0.8);
     const stretch = g.hand.lower.pointToWorldFrame(g.hand.lTip).vsub(g.body.pointToWorldFrame(g.con.pivotB)).norm();
-    if (A.ko || D.ko || A.downed > 0) releaseGrab(A, 0.5);
+    if (!alive(D) || A.downed > 0) releaseGrab(A, 0.5);
     else if (g.grip <= 0) { releaseGrab(A, 1.2); thump(6); }
     else if (stretch > 0.7) releaseGrab(A, 0.6);
     else if (g.pull >= 1) takedown(A, D);
   }
 }
-// What each fighter's HUD shows while they're held: [grip left, takedown progress], indexed by the fighter being held.
+// Per fighter while someone holds them: [grip left, takedown progress, holder's slot]; 0 when free.
 function holdInfo() {
-  return [1, 0].map(j => F[j].grab ? [Math.max(0, Math.round(F[j].grab.grip)), Math.round(F[j].grab.pull * 100)] : 0);
+  return lineup().map(f => { const a = heldBy(f); return a ? [Math.max(0, Math.round(a.grab.grip)), Math.round(a.grab.pull * 100), a.idx] : 0; });
 }
 function inputFor(i) {
-  if (dressing) return { yaw: i === 0 ? 0 : Math.PI };
-  if (match.status !== 'fight') return { yaw: mode === 'attract' || (mode === 'cpu' && i === 1) ? ai[i].yaw : localYaw[i] };
-  if (mode === 'attract') return aiInput(i, STEP);
-  if (i === localIdx) return keyInput(i);
-  if (mode === 'cpu') return aiInput(i, STEP);
-  if (mode === 'host') return remote.peer ? remote.input : idleInput(i);
-  return idleInput(i);
+  const ctl = roster.ctl[i], seat = seats[i];
+  if (dressing) return { yaw: spawnOf(i).yaw };
+  if (match.status !== 'fight' || !alive(F[i])) {
+    if (ctl === 'local') return { yaw: localYaw[i] };
+    if (seat && seat.peer) return { yaw: seat.input.yaw };
+    return { yaw: ai[i].yaw };
+  }
+  if (ctl === 'local') return keyInput(i);
+  if (ctl === 'dummy') return idleInput(i);
+  if (ctl === 'seat') return seat && seat.peer ? seat.input : format === '1v1' ? idleInput(i) : aiInput(i, STEP);
+  return aiInput(i, STEP);
 }
 let stepCount = 0;
 function simStep() {
-  const inputs = [inputFor(0), inputFor(1)];
-  if (mode === 'host' && remote.peer) localYaw[1] = inputs[1].yaw;
-  F[0].step(inputs[0], STEP); F[1].step(inputs[1], STEP);
+  const inputs = [0, 1, 2, 3].map(i => i < roster.n ? inputFor(i) : {});
+  for (let i = 0; i < roster.n; i++) if (seats[i] && seats[i].peer) localYaw[i] = inputs[i].yaw;
+  for (let i = 0; i < roster.n; i++) if (alive(F[i]) || F[i].ko && F[i].active) F[i].step(inputs[i], STEP);
   grapple(inputs, STEP);
   prevInputs = inputs;
   world.step(STEP);
@@ -878,64 +950,112 @@ function simStep() {
   if (mode === 'host' && net && stepCount % 2 === 0) sendHostState();
 }
 
-// ---------- online (claude.ai live room) ----------
+// ---------- online (claude.ai live room, or the Cloudflare relay) ----------
 let room = null, net = null, code = '';
-const remote = { peer:null, input:decodeInput(null), lastS:null, seenHits:0, round:0, since:0, lastSend:0, lastK:-1, lastY:0 };
+const remote = { lastS:null, seenHits:0, round:0, since:0, lastSend:0, lastK:-1, lastY:0, lookKey:'' };
 (async () => {
   try { room = window.claude && window.claude.use ? await window.claude.use('room') : null; } catch (e) { room = null; }
   $('bHost').disabled = $('bJoin').disabled = !room;
   $('netNote').textContent = room
-    ? 'Host a match and send the 4-letter code to a friend who can open this page. Online matches use the host’s rules. Two tabs work for testing.'
+    ? 'Host a match and send the 4-letter code to friends who can open this page. Online matches use the host’s rules. Two tabs work for testing.'
     : 'Online play works when this page is open on claude.ai and you are signed in. Solo modes work anywhere.';
 })();
 async function openRoom(c) {
   try { return await room.join('bonk-' + c.toLowerCase()); } catch (e) { return room; }
 }
 const r3 = v => Math.round(v * 1000) / 1000;
+// Seats friends fill in join order; anything else in the lineup stays a CPU.
+const SEAT_ORDER = { '1v1':[1], team:[1, 2, 3], coop:[2] };
+function seatName(i) {
+  if (i === 0) return 'P1';
+  const order = SEAT_ORDER[format] || [];
+  return 'P' + (order.indexOf(i) + 2);
+}
+function nameOf(i) {
+  if (mode === 'attract') return i % 2 ? 'BLUE' : 'RED';
+  if (i === localIdx) return 'YOU';
+  if (mode === 'guest') return guestView.nm[i] || '';
+  const ctl = roster.ctl[i];
+  if (ctl === 'dummy') return 'DUMMY';
+  if (ctl === 'seat' && seats[i] && seats[i].peer) return seatName(i);
+  if (ctl === 'seat' && format === '1v1') return 'WAITING';
+  return F[i].team === F[localIdx].team ? 'ALLY CPU' : 'CPU';
+}
+function hostNames() {
+  return lineup().map((f, i) => i === 0 ? 'P1' : roster.ctl[i] === 'seat' && seats[i] && seats[i].peer ? seatName(i) : roster.ctl[i] === 'seat' && format === '1v1' ? 'WAITING' : 'CPU');
+}
 function sendHostState() {
   const b = [];
-  for (const body of allBodies) {
+  for (const f of lineup()) for (const body of f.all) {
     const p = body.position, q = body.quaternion;
     b.push(r3(p.x), r3(p.y), r3(p.z), r3(q.x), r3(q.y), r3(q.z), r3(q.w));
   }
-  net.presence({ code, role:'host', s:{ b, h:[Math.round(F[0].hp), Math.round(F[1].hp)], sc:match.score, st:match.status, m:match.msg,
-    rd:match.round, hc:match.hits, hp:match.hit.map(r3), hb:!!match.hitBig, gm:gameMode, gp:holdInfo(), lk:[F[0].look, F[1].look] } }).catch(() => {});
+  net.presence({ code, role:'host', s:{ n:roster.n, b, h:lineup().map(f => Math.round(f.hp)), ot:lineup().map(f => f.out ? 1 : 0),
+    sc:match.score, st:match.status, m:match.msg, rd:match.round, hc:match.hits, hp:match.hit.map(r3), hb:!!match.hitBig, gm:gameMode,
+    gp:holdInfo(), lk:lineup().map(f => f.look), sl:lineup().map((f, i) => seats[i] && seats[i].peer || ''), nm:hostNames() } }).catch(() => {});
 }
 function codeFor(p) { return p && p.presence && p.presence.code === code; }
 function hostPoll() {
-  const g = net.peers().find(p => !p.sameTab && codeFor(p) && p.presence.role === 'guest');
-  if (g) {
-    if (g.peer !== remote.peer) { remote.peer = g.peer; newMatch(); flashSub('Opponent joined'); }
-    remote.input = decodeInput(g.presence.in);
+  const guests = net.peers().filter(p => !p.sameTab && codeFor(p) && p.presence.role === 'guest');
+  const here = new Set(guests.map(p => p.peer));
+  let joined = false;
+  for (const i of SEAT_ORDER[format]) {
+    const seat = seats[i];
+    if (seat.peer && !here.has(seat.peer)) {
+      flashSub(seatName(i) + ' left.' + (format === '1v1' ? ' Waiting for someone to join…' : ' A CPU takes over.'), format === '1v1');
+      seat.peer = null; seat.lookKey = ''; dress(i, randomLook());
+    }
+  }
+  for (const g of guests) {
+    if (SEAT_ORDER[format].some(i => seats[i].peer === g.peer)) continue;
+    const free = SEAT_ORDER[format].find(i => !seats[i].peer);
+    if (free === undefined) continue;
+    seats[free].peer = g.peer; joined = true;
+    flashSub(seatName(free) + ' joined');
+  }
+  if (joined) newMatch();
+  for (const g of guests) {
+    const i = SEAT_ORDER[format].find(k => seats[k].peer === g.peer);
+    if (i === undefined) continue;
+    seats[i].input = decodeInput(g.presence.in);
     const lk = JSON.stringify(cleanLook(g.presence.lk));
-    if (lk !== remote.lookKey) { remote.lookKey = lk; dress(1, JSON.parse(lk)); }
-  } else if (remote.peer) {
-    remote.peer = null; flashSub('Opponent left. Waiting for someone to join…', true);
+    if (lk !== seats[i].lookKey) { seats[i].lookKey = lk; dress(i, JSON.parse(lk)); }
   }
 }
 const renderPose = allBodies.map(() => ({ p:new THREE.Vector3(), q:new THREE.Quaternion(), tp:new THREE.Vector3(), tq:new THREE.Quaternion(), has:false }));
-const guestView = { h:[100,100], gp:[0,0] };
+const guestView = { h:[100,100,100,100], gp:[0,0,0,0], ot:[0,0,0,0], nm:[], lookKey:'' };
 function guestPoll(dt) {
   const h = net.peers().find(p => !p.sameTab && codeFor(p) && p.presence.role === 'host');
   const s = h && h.presence.s;
-  if (s && s !== remote.lastS && Array.isArray(s.b) && s.b.length === allBodies.length * 7) {
+  const n = s && (s.n === 4 ? 4 : s.n === 2 ? 2 : 0);
+  if (s && n && s !== remote.lastS && Array.isArray(s.b) && s.b.length === n * PER * 7) {
     if (!remote.lastS) $('sub').textContent = '';
     remote.lastS = s;
-    renderPose.forEach((rp, i) => {
-      const o = i * 7;
+    if (n !== roster.n) { setRoster(new Array(n).fill('net')); renderPose.forEach(rp => { rp.has = false; }); }
+    const me = (net.peers().find(p => p.sameTab) || {}).peer;
+    const li = Array.isArray(s.sl) && me ? s.sl.indexOf(me) : -1;
+    if (li !== localIdx || !remote.placed) {
+      localIdx = li; remote.placed = true;
+      if (li >= 0) localYaw[li] = spawnOf(li).yaw;
+      flashSub(li >= 0 ? 'You’re ' + ['on red', 'on blue'][li % 2] + (n === 4 ? ' as fighter ' + (li < 2 ? 1 : 2) : '') : 'The match is full, so you’re watching. You’ll get a seat if one opens.');
+    }
+    for (let i = 0; i < n * PER; i++) {
+      const rp = renderPose[i], o = i * 7;
       rp.tp.set(+s.b[o], +s.b[o+1], +s.b[o+2]); rp.tq.set(+s.b[o+3], +s.b[o+4], +s.b[o+5], +s.b[o+6]).normalize();
       if (!rp.has) { rp.p.copy(rp.tp); rp.q.copy(rp.tq); rp.has = true; }
-    });
-    guestView.h = Array.isArray(s.h) ? s.h.map(Number) : [100,100];
-    if (Array.isArray(s.lk) && s.lk.length === 2) {
-      const lk = JSON.stringify(s.lk.map(cleanLook));
-      if (lk !== guestView.lookKey) { guestView.lookKey = lk; const both = JSON.parse(lk); dress(0, both[0]); dress(1, both[1]); }
     }
-    guestView.gp = Array.isArray(s.gp) ? s.gp.map(v => Array.isArray(v) ? [Number(v[0]) || 0, Number(v[1]) || 0] : 0) : [0,0];
+    const nums = (a, d) => Array.isArray(a) ? a.slice(0, n).map(v => Number(v) || 0) : new Array(n).fill(d);
+    guestView.h = nums(s.h, 100); guestView.ot = nums(s.ot, 0);
+    guestView.nm = Array.isArray(s.nm) ? s.nm.slice(0, n).map(v => String(v).slice(0, 10)) : [];
+    if (Array.isArray(s.lk) && s.lk.length === n) {
+      const lk = JSON.stringify(s.lk.map(cleanLook));
+      if (lk !== guestView.lookKey) { guestView.lookKey = lk; JSON.parse(lk).forEach((l, i) => dress(i, l)); }
+    }
+    guestView.gp = Array.isArray(s.gp) ? s.gp.slice(0, n).map(v => Array.isArray(v) ? [Number(v[0]) || 0, Number(v[1]) || 0, Number(v[2])] : 0) : new Array(n).fill(0);
     if (Array.isArray(s.sc)) match.score = s.sc.map(Number);
     match.status = String(s.st); match.msg = typeof s.m === 'string' ? s.m.slice(0, 20) : '';
     if ((s.gm === 'ko' || s.gm === 'classic') && s.gm !== gameMode) setGameMode(s.gm, false);
-    if (s.rd !== remote.round) { remote.round = s.rd; localYaw[1] = Math.PI; }
+    if (s.rd !== remote.round) { remote.round = s.rd; if (localIdx >= 0) localYaw[localIdx] = spawnOf(localIdx).yaw; }
     if (s.hc !== remote.seenHits) {
       if (remote.seenHits && Array.isArray(s.hp)) { spark(+s.hp[0], +s.hp[1], +s.hp[2], !!s.hb); thump(s.hb ? 15 : 8); }
       remote.seenHits = s.hc;
@@ -944,38 +1064,80 @@ function guestPoll(dt) {
   if (!remote.lastS && performance.now() - remote.since > 9000)
     $('sub').textContent = 'No match found for code ' + code + '. Check the code and that the host still has the page open.';
   const a = 1 - Math.exp(-dt * 18);
-  for (const rp of renderPose) { rp.p.lerp(rp.tp, a); rp.q.slerp(rp.tq, a); }
-  const inp = keyInput(1), k = encodeInput(inp), now = performance.now();
+  for (let i = 0; i < roster.n * PER; i++) { const rp = renderPose[i]; rp.p.lerp(rp.tp, a); rp.q.slerp(rp.tq, a); }
+  const inp = keyInput(localIdx), k = encodeInput(inp), now = performance.now();
   if (k !== remote.lastK || Math.abs(inp.yaw - remote.lastY) > 0.01 || now - remote.lastSend > 250) {
     remote.lastK = k; remote.lastY = inp.yaw; remote.lastSend = now;
     net.presence({ code, role:'guest', in:{ k, y:r3(inp.yaw) }, lk:myLook }).catch(() => {});
   }
 }
 let subTimer = 0;
-function flashSub(text, sticky) { $('sub').textContent = text; subTimer = sticky ? Infinity : 2.5; }
+function flashSub(text, sticky) { $('sub').textContent = text; subTimer = sticky ? Infinity : 3; }
+
+// ---------- HUD ----------
+function buildHud() {
+  const row = i => `<div class="frow"><div class="tag" id="tag${i}"></div><div class="hp"><i id="hp${i}"></i></div>` +
+    `<div class="hold" id="hold${i}" hidden><span>GRIP</span><div class="mini"><i id="grip${i}"></i></div><span>TAKEDOWN</span><div class="mini pull"><i id="pull${i}"></i></div></div></div>`;
+  const idx = [...Array(roster.n).keys()];
+  $('sideA').innerHTML = idx.filter(i => i % 2 === 0).map(row).join('');
+  $('sideB').innerHTML = idx.filter(i => i % 2 === 1).map(row).join('');
+  $('hud').classList.toggle('four', roster.n === 4);
+  hudCache.clear();
+}
+const hudCache = new Map();
+function setHud(id, prop, value) {
+  const key = id + prop;
+  if (hudCache.get(key) === value) return;
+  hudCache.set(key, value);
+  const el = $(id); if (!el) return;
+  if (prop === 'text') el.textContent = value; else if (prop === 'hidden') el.hidden = value; else el.style.width = value;
+}
+// Floating labels over heads, only in 2v2 where four similar fighters are hard to tell apart.
+const tags = [0, 1, 2, 3].map(i => {
+  const c = document.createElement('canvas'); c.width = 256; c.height = 64;
+  const tex = new THREE.CanvasTexture(c);
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true }));
+  sp.scale.set(0.9, 0.225, 1); sp.renderOrder = 10; sp.visible = false; scene.add(sp);
+  return { c, tex, sp, text: '' };
+});
+function drawTag(t, text, team) {
+  if (t.text === text) return;
+  t.text = text;
+  const g = t.c.getContext('2d');
+  g.clearRect(0, 0, 256, 64);
+  g.font = '700 34px "IBM Plex Mono", ui-monospace, monospace'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.lineWidth = 8; g.strokeStyle = 'rgba(10,12,18,.85)'; g.strokeText(text, 128, 34);
+  g.fillStyle = text === 'YOU' ? '#e8a33d' : team ? '#7fb3f0' : '#f08a77'; g.fillText(text, 128, 34);
+  t.tex.needsUpdate = true;
+}
 
 // ---------- menu ----------
 async function leaveNet() {
   if (net) { const n = net; net = null; try { if (n !== room) await n.leave(); else await room.presence({ code:null, role:null, s:null, in:null, lk:null }); } catch (e) {} }
-  remote.peer = null; remote.lastS = null; code = '';
+  remote.lastS = null; code = '';
+  for (const k in seats) delete seats[k];
 }
 async function start(m, c) {
   await leaveNet();
-  mode = m; localIdx = m === 'guest' ? 1 : 0;
+  const solo = { cpu:['local','cpu'], dummy:['local','dummy'], duo:['local','cpu','cpu','cpu'] };
+  const hosted = { '1v1':['local','seat'], team:['local','seat','seat','seat'], coop:['local','cpu','seat','cpu'] };
+  mode = solo[m] ? 'solo' : m;
+  if (mode === 'host') format = hostFormat;
+  localIdx = mode === 'guest' ? -1 : 0;
+  setRoster(solo[m] || (mode === 'host' ? hosted[format] : ['net', 'net']));
+  if (mode === 'host') for (const i of SEAT_ORDER[format]) seats[i] = { peer:null, input:decodeInput(null), lookKey:'' };
   $('menu').hidden = true; $('menuBtn').hidden = false; $('legend').hidden = false;
-  $('tagA').textContent = m === 'guest' ? 'HOST' : 'YOU';
-  $('tagB').textContent = m === 'guest' ? 'YOU' : m === 'cpu' ? 'CPU' : m === 'dummy' ? 'DUMMY' : 'RIVAL';
   $('sub').textContent = '';
-  if (m === 'guest') { dress(1, myLook); dress(0, randomLook()); } else { dress(0, myLook); dress(1, randomLook()); }
-  remote.lookKey = ''; guestView.lookKey = '';
+  F.forEach((f, i) => dress(i, i === 0 && mode !== 'guest' ? myLook : randomLook()));
+  remote.lookKey = ''; guestView.lookKey = ''; guestView.nm = [];
   newMatch();
-  if (m === 'host' || m === 'guest') {
+  if (mode === 'host' || mode === 'guest') {
     code = c;
     $('codeText').textContent = code; $('codechip').hidden = false;
     net = await openRoom(code);
-    remote.since = performance.now(); remote.seenHits = 0; remote.round = 0; remote.lastK = -1;
+    remote.since = performance.now(); remote.seenHits = 0; remote.round = 0; remote.lastK = -1; remote.placed = false;
     renderPose.forEach(rp => { rp.has = false; });
-    if (m === 'host') flashSub('Waiting for someone to join with code ' + code + '…', true);
+    if (mode === 'host') flashSub(format === '1v1' ? 'Waiting for someone to join with code ' + code + '…' : 'Share code ' + code + '. Friends who join take over a CPU seat.', format === '1v1');
     else flashSub('Connecting to ' + code + '…', true);
   } else $('codechip').hidden = true;
   focus();
@@ -993,8 +1155,18 @@ function setGameMode(m, remember) {
 $('gmClassic').onclick = () => setGameMode('classic', true);
 $('gmKo').onclick = () => setGameMode('ko', true);
 try { if (localStorage.getItem('bonk-mode') === 'ko') setGameMode('ko', false); } catch (e) {}
+let hostFormat = '1v1';
+const FORMATS = { '1v1':'fm1v1', team:'fmTeam', coop:'fmCoop' };
+function setHostFormat(f) {
+  hostFormat = f;
+  for (const [k, id] of Object.entries(FORMATS)) $(id).setAttribute('aria-pressed', String(k === f));
+  try { localStorage.setItem('bonk-format', f); } catch (e) {}
+}
+for (const [k, id] of Object.entries(FORMATS)) $(id).onclick = () => setHostFormat(k);
+try { const f = localStorage.getItem('bonk-format'); if (FORMATS[f]) setHostFormat(f); } catch (e) {}
 const CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 $('bCpu').onclick = () => start('cpu');
+$('bDuo').onclick = () => start('duo');
 $('bDummy').onclick = () => start('dummy');
 $('bHost').onclick = () => start('host', Array.from({ length:4 }, () => CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)]).join(''));
 $('bJoin').onclick = () => {
@@ -1003,10 +1175,14 @@ $('bJoin').onclick = () => {
   start('guest', c);
 };
 $('codeIn').addEventListener('keydown', e => { if (e.key === 'Enter') $('bJoin').click(); });
+function toAttract() {
+  mode = 'attract'; localIdx = 0; format = '1v1';
+  setRoster(['cpu', 'cpu']);
+  dress(0, myLook); dress(1, randomLook()); newMatch();
+}
 $('menuBtn').onclick = async () => {
   await leaveNet();
-  mode = 'attract'; localIdx = 0;
-  dress(0, myLook); dress(1, randomLook()); newMatch();
+  toAttract();
   $('menu').hidden = false; $('menuBtn').hidden = true; $('legend').hidden = true; $('codechip').hidden = true; $('sub').textContent = '';
 };
 
@@ -1063,14 +1239,23 @@ $('bDone').onclick = () => {
 // ---------- main loop ----------
 const camPos = new THREE.Vector3(0, 6, -9), camLook = new THREE.Vector3();
 let acc = 0, last = performance.now(), attractAng = 0, lastHint = null;
-newMatch();
+toAttract();
+const shown = i => mode === 'guest' ? !guestView.ot[i] : !F[i].out;
+// Follow your own fighter; once they're out, follow a teammate who's still in.
+function camIdx() {
+  if (localIdx >= 0 && shown(localIdx)) return localIdx;
+  const team = localIdx >= 0 ? localIdx % 2 : 0;
+  for (let i = 0; i < roster.n; i++) if (i % 2 === team && shown(i)) return i;
+  for (let i = 0; i < roster.n; i++) if (shown(i)) return i;
+  return 0;
+}
 function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
-  if (mode !== 'attract') {
+  if (mode !== 'attract' && localIdx >= 0) {
     const turn = (keys.ArrowLeft ? 1 : 0) - (keys.ArrowRight ? 1 : 0);
     localYaw[localIdx] = wrap(localYaw[localIdx] + turn * 2.6 * dt);
-    camPitch = clamp(camPitch + ((keys.ArrowUp ? 1 : 0) - (keys.ArrowDown ? 1 : 0)) * 1.2 * dt, 0.08, 1.15);
   }
+  if (mode !== 'attract') camPitch = clamp(camPitch + ((keys.ArrowUp ? 1 : 0) - (keys.ArrowDown ? 1 : 0)) * 1.2 * dt, 0.08, 1.15);
   if (mode === 'guest') {
     if (net) guestPoll(dt);
   } else {
@@ -1078,9 +1263,19 @@ function frame(now) {
     acc += dt; let n = 0;
     while (acc >= STEP && n < 4) { simStep(); acc -= STEP; n++; }
     if (n === 4) acc = 0;
-    allBodies.forEach((b, i) => { renderPose[i].p.copy(b.position); renderPose[i].q.copy(b.quaternion); renderPose[i].has = true; });
+    for (let i = 0; i < roster.n * PER; i++) { const b = allBodies[i]; renderPose[i].p.copy(b.position); renderPose[i].q.copy(b.quaternion); renderPose[i].has = true; }
   }
-  renderPose.forEach((rp, i) => { meshes[i].position.copy(rp.p); meshes[i].quaternion.copy(rp.q); });
+  for (let i = 0; i < roster.n; i++) {
+    const vis = shown(i);
+    for (let k = 0; k < PER; k++) {
+      const m = meshes[i * PER + k], rp = renderPose[i * PER + k];
+      m.visible = vis; m.position.copy(rp.p); m.quaternion.copy(rp.q);
+    }
+    const t = tags[i];
+    t.sp.visible = vis && roster.n === 4 && mode !== 'attract' && !dressing;
+    if (t.sp.visible) { drawTag(t, nameOf(i), i % 2); t.sp.position.set(renderPose[i * PER].p.x, renderPose[i * PER].p.y + 1.2, renderPose[i * PER].p.z); }
+  }
+  for (let i = roster.n; i < 4; i++) tags[i].sp.visible = false;
 
   for (let i = sparks.length - 1; i >= 0; i--) {
     const s = sparks[i]; s.life += dt;
@@ -1100,7 +1295,7 @@ function frame(now) {
     camPos.lerp(new THREE.Vector3(Math.sin(attractAng) * 10, 5.5, Math.cos(attractAng) * 10), 0.05);
     camLook.lerp(new THREE.Vector3(0, 1, 0), 0.05);
   } else {
-    const me = renderPose[localIdx * PER].p, y = localYaw[localIdx], dist = 5;
+    const ci = camIdx(), me = renderPose[ci * PER].p, y = ci === localIdx ? localYaw[ci] : (ci % 2 ? Math.PI : 0), dist = roster.n === 4 ? 6 : 5;
     const fx = Math.sin(y), fz = Math.cos(y), cp = Math.cos(camPitch), sp = Math.sin(camPitch);
     const tgt = new THREE.Vector3(me.x - fx * dist * cp, Math.max(me.y, 0.8) + 0.4 + dist * sp, me.z - fz * dist * cp);
     const k = 1 - Math.exp(-dt * 8);
@@ -1109,25 +1304,25 @@ function frame(now) {
   }
   camera.position.copy(camPos); camera.lookAt(camLook);
 
-  const hp = mode === 'guest' ? guestView.h : [F[0].hp, F[1].hp];
-  $('hpA').style.width = clamp(hp[0], 0, 100) + '%';
-  $('hpB').style.width = clamp(hp[1], 0, 100) + '%';
-  $('score').textContent = match.score[0] + ' – ' + match.score[1];
+  const hp = mode === 'guest' ? guestView.h : lineup().map(f => f.hp);
   const gp = mode === 'guest' ? guestView.gp : holdInfo();
-  ['A','B'].forEach((s, i) => {
+  for (let i = 0; i < roster.n; i++) {
+    setHud('tag' + i, 'text', nameOf(i) + (shown(i) ? '' : ' · OUT'));
+    setHud('hp' + i, 'width', clamp(hp[i], 0, 100) + '%');
     const g = mode === 'attract' ? 0 : gp[i];
-    $('hold' + s).hidden = !g;
-    if (g) { $('grip' + s).style.width = clamp(g[0], 0, 100) + '%'; $('pull' + s).style.width = clamp(g[1], 0, 100) + '%'; }
-  });
+    setHud('hold' + i, 'hidden', !g);
+    if (g) { setHud('grip' + i, 'width', clamp(g[0], 0, 100) + '%'); setHud('pull' + i, 'width', clamp(g[1], 0, 100) + '%'); }
+  }
+  setHud('score', 'text', match.score[0] + ' – ' + match.score[1]);
   let hint = '';
-  if (mode !== 'attract' && match.status === 'fight') {
+  if (mode !== 'attract' && match.status === 'fight' && localIdx >= 0) {
     if (gp[localIdx]) hint = '<b>Grabbed!</b> Tap Q, E, A or D fast, or hold S, to break free';
-    else if (gp[1 - localIdx]) hint = '<b>Holding on.</b> Hold Z to pull them down. Tap X to let go';
+    else if (gp.some(g => g && g[2] === localIdx)) hint = '<b>Holding on.</b> Hold Z to pull them down. Tap X to let go';
   }
   if (hint !== lastHint) { lastHint = hint; $('hint').innerHTML = hint; $('hint').hidden = !hint; }
   $('banner').textContent = mode === 'attract' ? '' : match.msg;
   if (subTimer !== Infinity && subTimer > 0) { subTimer -= dt; if (subTimer <= 0) $('sub').textContent = ''; }
-  if (mode === 'host' && remote.peer && subTimer === Infinity) { subTimer = 0; }
+  if (mode === 'host' && subTimer === Infinity && Object.values(seats).some(s => s.peer)) subTimer = 0.01;
 
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
