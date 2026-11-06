@@ -68,6 +68,14 @@ input{font:600 16px var(--mono);letter-spacing:.2em;text-transform:uppercase;wid
 .seg button[aria-pressed="true"]{border-color:var(--gold);background:rgba(232,163,61,.14)}
 .seg button[aria-pressed="true"] b{color:var(--gold)}
 #modeTag{font-size:10px;letter-spacing:.14em;color:var(--muted);text-align:center;margin-top:4px}
+.hold{display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;font-size:10px;letter-spacing:.12em;color:var(--ink);max-width:100%}
+.side.b .hold{justify-content:flex-end}
+.mini{width:64px;height:6px;background:rgba(0,0,0,.45);border:1px solid var(--line);border-radius:2px;overflow:hidden}
+.mini i{display:block;height:100%;width:0;background:var(--ink)}
+.mini.pull i{background:var(--gold)}
+#hint{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(84px + env(safe-area-inset-bottom,0px));max-width:calc(100% - 32px);
+  text-align:center;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:6px 12px;pointer-events:none}
+#hint b{color:var(--gold)}
 @media (pointer:fine){#touchNote{display:none}}
 @media (prefers-reduced-motion:reduce){.hp i{transition:none}}
 </style>
@@ -75,17 +83,21 @@ input{font:600 16px var(--mono);letter-spacing:.2em;text-transform:uppercase;wid
 <div id="stage"></div>
 
 <div id="hud">
-  <div class="side a"><div class="tag" id="tagA">RED</div><div class="hp"><i id="hpA"></i></div></div>
+  <div class="side a"><div class="tag" id="tagA">RED</div><div class="hp"><i id="hpA"></i></div>
+    <div class="hold" id="holdA" hidden><span>GRIP</span><div class="mini"><i id="gripA"></i></div><span>TAKEDOWN</span><div class="mini pull"><i id="pullA"></i></div></div></div>
   <div><div id="score">0 – 0</div><div id="modeTag">CLASSIC</div></div>
-  <div class="side b"><div class="tag" id="tagB">BLUE</div><div class="hp"><i id="hpB"></i></div></div>
+  <div class="side b"><div class="tag" id="tagB">BLUE</div><div class="hp"><i id="hpB"></i></div>
+    <div class="hold" id="holdB" hidden><span>GRIP</span><div class="mini"><i id="gripB"></i></div><span>TAKEDOWN</span><div class="mini pull"><i id="pullB"></i></div></div></div>
 </div>
 <div id="banner"></div>
 <div id="sub"></div>
+<div id="hint" hidden></div>
 <button id="menuBtn" hidden>Menu</button>
 <div id="codechip" hidden><span class="note">Room code</span><b id="codeText">----</b></div>
 <div id="legend" hidden>
   <span><kbd>W</kbd>/<kbd>S</kbd> walk</span><span><kbd>Q</kbd> left arm</span><span><kbd>E</kbd> right arm</span>
-  <span><kbd>A</kbd> left leg</span><span><kbd>D</kbd> right leg</span><span><kbd>←</kbd><kbd>→</kbd> turn</span><span><kbd>↑</kbd><kbd>↓</kbd> camera</span>
+  <span><kbd>A</kbd> left leg</span><span><kbd>D</kbd> right leg</span><span><kbd>T</kbd> grab</span><span><kbd>R</kbd> pull down</span>
+  <span><kbd>←</kbd><kbd>→</kbd> turn</span><span><kbd>↑</kbd><kbd>↓</kbd> camera</span>
 </div>
 
 <div id="menu">
@@ -116,6 +128,9 @@ input{font:600 16px var(--mono);letter-spacing:.2em;text-transform:uppercase;wid
         <span><kbd>W</kbd> <kbd>S</kbd></span><span>Walk forward / back</span>
         <span><kbd>Q</kbd> <kbd>E</kbd></span><span>Swing left / right arm</span>
         <span><kbd>A</kbd> <kbd>D</kbd></span><span>Kick left / right leg</span>
+        <span><kbd>T</kbd></span><span>Hold to grab and keep hold; let go to release</span>
+        <span><kbd>R</kbd></span><span>While holding on, hold to pull them down</span>
+        <span><kbd>Q</kbd> <kbd>E</kbd> <kbd>A</kbd> <kbd>D</kbd></span><span>When grabbed, tap fast (or hold <kbd>S</kbd>) to break free</span>
         <span><kbd>←</kbd> <kbd>→</kbd></span><span>Turn to look around</span>
         <span><kbd>↑</kbd> <kbd>↓</kbd></span><span>Tilt the camera</span>
       </div>
@@ -257,6 +272,7 @@ class Fighter {
       return L;
     });
     this.walkPhase = 0;
+    this.grab = null;
   }
   reset(x, z, yaw) {
     const T = this.torso;
@@ -269,16 +285,20 @@ class Fighter {
       L.heldT = 0;
     }
     for (const b of this.all) { b.velocity.set(0,0,0); b.angularVelocity.set(0,0,0); b.force.set(0,0,0); b.torque.set(0,0,0); }
-    this.hp = 100; this.ko = false; this.stun = 0;
+    this.hp = 100; this.ko = false; this.stun = 0; this.downed = 0; this.grabCool = 0;
   }
   step(inp, dt) {
     const T = this.torso;
     this.stun = Math.max(0, this.stun - dt);
+    this.downed = Math.max(0, this.downed - dt);
+    this.grabCool = Math.max(0, this.grabCool - dt);
     for (const L of this.limbs) L.cool = Math.max(0, L.cool - dt);
     const over = Math.abs(T.position.x) < PLAT + 0.1 && Math.abs(T.position.z) < PLAT + 0.1;
-    const mv = (inp.fw ? 1 : 0) - (inp.bk ? 1 : 0);
+    const down = this.downed > 0;
+    const mv = down ? 0 : (inp.fw ? 1 : 0) - (inp.bk ? 1 : 0);
     this.grounded = false;
-    if (!this.ko) {
+    // While downed after a takedown, balance and footwork switch off so the body stays on the mat; they return on their own when it ends.
+    if (!this.ko && !down) {
       const up = T.quaternion.vmult(UP, tv.a);
       const ku = this.stun > 0 ? 250 : 900, du = 80;
       // Torque along up × worldUp tips the torso back to vertical.
@@ -308,9 +328,12 @@ class Fighter {
       L.striking = held;
       if (this.ko) continue;
       const s = L.side, P = L.pivot;
+      const gripHand = this.grab && this.grab.hand === L;
+      if (gripHand) L.striking = false;
       let joint, end, k;
       if (L.arm) {
-        if (held) { const d = norm3(-s * 0.28, 0.08, 1); joint = along(P, d, L.up); end = along(P, d, L.up + L.lo); k = 1000; }
+        if (held && !gripHand) { const d = norm3(-s * 0.28, 0.08, 1); joint = along(P, d, L.up); end = along(P, d, L.up + L.lo); k = 1000; }
+        else if (inp.gr) { const d = norm3(-s * 0.18, -0.05, 1); joint = along(P, d, L.up); end = along(P, d, L.up + L.lo); k = 700; }
         else { joint = [P[0] - s * 0.06, P[1] - 0.26, P[2] + 0.15]; end = [P[0] - s * 0.22, P[1] + 0.08, P[2] + 0.32]; k = 320; }
       } else if (held) {
         // Chamber the knee for a moment before extending so kicks read as kicks.
@@ -325,8 +348,10 @@ class Fighter {
         end = [joint[0], joint[1] - Math.cos(a - bend) * L.lo, joint[2] + Math.sin(a - bend) * L.lo];
         k = 600;
       }
+      if (down) k *= 0.25;
       this.drive(L.upper, L.uTip, joint, k * 0.8, L.mu);
-      this.drive(L.lower, L.lTip, end, k, L.ml);
+      // The gripping hand is held by its joint to the opponent; driving it as well would fight that joint.
+      if (!gripHand) this.drive(L.lower, L.lTip, end, k, L.ml);
       this.keepFacing(L.upper); this.keepFacing(L.lower);
     }
   }
@@ -512,7 +537,7 @@ function thump(power) {
 
 // ---------- input ----------
 const keys = {};
-const GAME_KEYS = new Set(['KeyW','KeyS','KeyQ','KeyE','KeyA','KeyD','ArrowLeft','ArrowRight','ArrowUp','ArrowDown']);
+const GAME_KEYS = new Set(['KeyW','KeyS','KeyQ','KeyE','KeyA','KeyD','KeyT','KeyR','ArrowLeft','ArrowRight','ArrowUp','ArrowDown']);
 addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT') return;
   if (GAME_KEYS.has(e.code)) { e.preventDefault(); keys[e.code] = true; if (actx && actx.state === 'suspended') actx.resume(); }
@@ -522,9 +547,9 @@ addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
 const localYaw = [0, Math.PI];
 let camPitch = 0.38;
 function keyInput(idx) {
-  return { fw:keys.KeyW, bk:keys.KeyS, la:keys.KeyQ, ra:keys.KeyE, ll:keys.KeyA, rl:keys.KeyD, yaw:localYaw[idx] };
+  return { fw:keys.KeyW, bk:keys.KeyS, la:keys.KeyQ, ra:keys.KeyE, ll:keys.KeyA, rl:keys.KeyD, gr:keys.KeyT, pd:keys.KeyR, yaw:localYaw[idx] };
 }
-const BITS = ['fw','bk','la','ra','ll','rl'];
+const BITS = ['fw','bk','la','ra','ll','rl','gr','pd'];
 const encodeInput = inp => BITS.reduce((m, k, i) => m | (inp[k] ? 1 << i : 0), 0);
 function decodeInput(o) {
   const inp = { yaw: typeof o?.y === 'number' ? o.y : Math.PI };
@@ -534,12 +559,26 @@ function decodeInput(o) {
 }
 
 // ---------- CPU ----------
-const ai = [{ yaw:0, t:1, hold:0, key:null }, { yaw:Math.PI, t:1, hold:0, key:null }];
+const ai = [0, Math.PI].map(yaw => ({ yaw, t:1, hold:0, key:null, grabT:0, takedown:false, mashT:0, mashOn:false, mashKey:'la' }));
 function aiInput(i, dt) {
   const s = ai[i], me = F[i].torso.position, op = F[1-i].torso.position;
   s.yaw = wrap(s.yaw + clamp(wrap(Math.atan2(op.x - me.x, op.z - me.z) - s.yaw), -3*dt, 3*dt));
   const dist = Math.hypot(op.x - me.x, op.z - me.z);
   const inp = { yaw: s.yaw };
+  if (F[1-i].grab) {
+    // About two presses a second: a human grabber can still land a takedown if they commit to it quickly.
+    s.mashT -= dt;
+    if (s.mashT <= 0) { s.mashOn = !s.mashOn; s.mashT = 0.15 + Math.random() * 0.2; if (s.mashOn) s.mashKey = ['la','ra','ll','rl'][Math.floor(Math.random() * 4)]; }
+    if (s.mashOn) inp[s.mashKey] = true;
+    return inp;
+  }
+  if (s.grabT > 0) {
+    s.grabT -= dt; inp.gr = true;
+    if (dist > 0.8) inp.fw = true;
+    if (F[i].grab && s.takedown) inp.pd = true;
+    return inp;
+  }
+  if (dist < 1.3 && s.hold <= 0 && Math.random() < dt * 0.35) { s.grabT = 1.6 + Math.random() * 1.2; s.takedown = Math.random() < 0.6; return inp; }
   if (dist > 1.5) inp.fw = true; else if (dist < 0.9) inp.bk = true;
   s.t -= dt;
   if (s.hold > 0) { s.hold -= dt; inp[s.key] = true; }
@@ -559,6 +598,7 @@ function idleInput(i) {
 let mode = 'attract', localIdx = 0;
 const match = { status:'ready', timer:1.2, msg:'', sub:'', score:[0,0], round:1, hits:0, hit:[0,0,0] };
 function resetRound() {
+  releaseGrab(F[0], 0); releaseGrab(F[1], 0);
   F[0].reset(0, -2.5, 0); F[1].reset(0, 2.5, Math.PI);
   localYaw[0] = 0; localYaw[1] = Math.PI; ai[0].yaw = 0; ai[1].yaw = Math.PI;
   match.status = 'ready'; match.timer = 1.2; match.msg = 'ROUND ' + match.round;
@@ -593,6 +633,7 @@ function resolveHits() {
     const dmg = Math.min(20, (h.v - 1.5) * 2.2) * (head ? 1.5 : isTorso ? 1 : 0.35) * (h.limb.arm ? 1 : 1.25);
     D.hp = Math.max(0, D.hp - dmg);
     D.stun = Math.max(D.stun, 0.2 + dmg / 30);
+    if (D.grab && D.grab.body.fighter === A) D.grab.grip -= dmg * 3;
     const dx = D.torso.position.x - A.torso.position.x, dz = D.torso.position.z - A.torso.position.z, n = Math.hypot(dx, dz) || 1;
     // Knockback grows with damage already taken, so beaten fighters fly off the mat.
     const mag = (dmg * 4 + 12) * (gameMode === 'ko' ? 1 : 1 + (100 - D.hp) / 70);
@@ -602,6 +643,73 @@ function resolveHits() {
     spark(h.x, h.y, h.z, match.hitBig); thump(dmg);
   }
   hits.length = 0;
+}
+// ---------- grappling ----------
+const GRAB_REACH = 0.16, STRUGGLE_KEYS = ['la','ra','ll','rl'];
+let prevInputs = [{}, {}];
+function tryGrab(A, D) {
+  if (A.grab || A.grabCool > 0 || A.ko || A.downed > 0 || D.ko) return;
+  for (const L of A.limbs) {
+    if (!L.arm) continue;
+    const tip = L.lower.pointToWorldFrame(L.lTip);
+    for (const b of D.all) {
+      if (tip.vsub(b.position).norm() - (b === D.torso ? 0.3 : 0.1) > GRAB_REACH) continue;
+      const local = new CANNON.Vec3();
+      b.pointToLocalFrame(tip, local);
+      // A capped joint force means a hard enough yank stretches the grip apart instead of welding the fighters together.
+      const con = new CANNON.PointToPointConstraint(L.lower, L.lTip, b, local, 900);
+      world.addConstraint(con);
+      A.grab = { hand:L, body:b, con, grip:100, pull:0 };
+      thump(3);
+      return;
+    }
+  }
+}
+function releaseGrab(A, cool) {
+  if (!A.grab) return;
+  world.removeConstraint(A.grab.con);
+  A.grab = null; A.grabCool = cool;
+}
+function takedown(A, D) {
+  releaseGrab(A, 1);
+  D.downed = 1.6; D.stun = Math.max(D.stun, 1.6);
+  D.hp = Math.max(0, D.hp - 8);
+  if (D.hp <= 0) D.ko = true;
+  const tp = D.torso.position, dx = A.torso.position.x - tp.x, dz = A.torso.position.z - tp.z, n = Math.hypot(dx, dz) || 1;
+  // Pushing the head toward the grabber and the hips away tips the body over instead of just dropping it straight down.
+  D.torso.applyImpulse(new CANNON.Vec3(dx/n*45, -50, dz/n*45), new CANNON.Vec3(tp.x, tp.y + 0.6, tp.z));
+  match.hits++; match.hit = [tp.x, tp.y, tp.z]; match.hitBig = true;
+  spark(tp.x, tp.y, tp.z, true); thump(18);
+  match.msg = 'TAKEDOWN'; match.timer = 0.9;
+}
+// Runs before the physics step so the pull-down forces are integrated this frame.
+function grapple(inputs, dt) {
+  for (const i of [0,1]) {
+    const A = F[i], D = F[1-i], inp = inputs[i], dInp = inputs[1-i], prev = prevInputs[1-i];
+    if (match.status !== 'fight') { releaseGrab(A, 0); continue; }
+    if (!A.grab) { if (inp.gr) tryGrab(A, D); continue; }
+    const g = A.grab;
+    let presses = 0;
+    for (const k of STRUGGLE_KEYS) if (dInp[k] && !prev[k]) presses++;
+    g.grip -= presses * 14 + (dInp.bk ? 30 * dt : 0);
+    g.pull = Math.max(0, g.pull - presses * 0.12);
+    if (inp.pd) {
+      g.pull += dt * 1.1;
+      const tp = D.torso.position, dx = A.torso.position.x - tp.x, dz = A.torso.position.z - tp.z, n = Math.hypot(dx, dz) || 1;
+      D.torso.force.x += dx/n * 150; D.torso.force.z += dz/n * 150;
+      D.torso.force.y -= D.mass * GRAV * 0.5;
+    } else g.pull = Math.max(0, g.pull - dt * 0.8);
+    const stretch = g.hand.lower.pointToWorldFrame(g.hand.lTip).vsub(g.body.pointToWorldFrame(g.con.pivotB)).norm();
+    if (!inp.gr) releaseGrab(A, 0.3);
+    else if (A.ko || D.ko || A.downed > 0) releaseGrab(A, 0.5);
+    else if (g.grip <= 0) { releaseGrab(A, 1.2); thump(6); }
+    else if (stretch > 0.7) releaseGrab(A, 0.6);
+    else if (g.pull >= 1) takedown(A, D);
+  }
+}
+// What each fighter's HUD shows while they're held: [grip left, takedown progress], indexed by the fighter being held.
+function holdInfo() {
+  return [1, 0].map(j => F[j].grab ? [Math.max(0, Math.round(F[j].grab.grip)), Math.round(F[j].grab.pull * 100)] : 0);
 }
 function inputFor(i) {
   if (match.status !== 'fight') return { yaw: mode === 'attract' || (mode === 'cpu' && i === 1) ? ai[i].yaw : localYaw[i] };
@@ -616,6 +724,8 @@ function simStep() {
   const inputs = [inputFor(0), inputFor(1)];
   if (mode === 'host' && remote.peer) localYaw[1] = inputs[1].yaw;
   F[0].step(inputs[0], STEP); F[1].step(inputs[1], STEP);
+  grapple(inputs, STEP);
+  prevInputs = inputs;
   world.step(STEP);
   resolveHits();
   tickMatch(STEP);
@@ -644,7 +754,7 @@ function sendHostState() {
     b.push(r3(p.x), r3(p.y), r3(p.z), r3(q.x), r3(q.y), r3(q.z), r3(q.w));
   }
   net.presence({ code, role:'host', s:{ b, h:[Math.round(F[0].hp), Math.round(F[1].hp)], sc:match.score, st:match.status, m:match.msg,
-    rd:match.round, hc:match.hits, hp:match.hit.map(r3), hb:!!match.hitBig, gm:gameMode } }).catch(() => {});
+    rd:match.round, hc:match.hits, hp:match.hit.map(r3), hb:!!match.hitBig, gm:gameMode, gp:holdInfo() } }).catch(() => {});
 }
 function codeFor(p) { return p && p.presence && p.presence.code === code; }
 function hostPoll() {
@@ -657,7 +767,7 @@ function hostPoll() {
   }
 }
 const renderPose = allBodies.map(() => ({ p:new THREE.Vector3(), q:new THREE.Quaternion(), tp:new THREE.Vector3(), tq:new THREE.Quaternion(), has:false }));
-const guestView = { h:[100,100] };
+const guestView = { h:[100,100], gp:[0,0] };
 function guestPoll(dt) {
   const h = net.peers().find(p => !p.sameTab && codeFor(p) && p.presence.role === 'host');
   const s = h && h.presence.s;
@@ -670,6 +780,7 @@ function guestPoll(dt) {
       if (!rp.has) { rp.p.copy(rp.tp); rp.q.copy(rp.tq); rp.has = true; }
     });
     guestView.h = Array.isArray(s.h) ? s.h.map(Number) : [100,100];
+    guestView.gp = Array.isArray(s.gp) ? s.gp.map(v => Array.isArray(v) ? [Number(v[0]) || 0, Number(v[1]) || 0] : 0) : [0,0];
     if (Array.isArray(s.sc)) match.score = s.sc.map(Number);
     match.status = String(s.st); match.msg = typeof s.m === 'string' ? s.m.slice(0, 20) : '';
     if ((s.gm === 'ko' || s.gm === 'classic') && s.gm !== gameMode) setGameMode(s.gm, false);
@@ -747,7 +858,7 @@ $('menuBtn').onclick = async () => {
 
 // ---------- main loop ----------
 const camPos = new THREE.Vector3(0, 6, -9), camLook = new THREE.Vector3();
-let acc = 0, last = performance.now(), attractAng = 0;
+let acc = 0, last = performance.now(), attractAng = 0, lastHint = null;
 newMatch();
 function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
@@ -791,6 +902,18 @@ function frame(now) {
   $('hpA').style.width = clamp(hp[0], 0, 100) + '%';
   $('hpB').style.width = clamp(hp[1], 0, 100) + '%';
   $('score').textContent = match.score[0] + ' – ' + match.score[1];
+  const gp = mode === 'guest' ? guestView.gp : holdInfo();
+  ['A','B'].forEach((s, i) => {
+    const g = mode === 'attract' ? 0 : gp[i];
+    $('hold' + s).hidden = !g;
+    if (g) { $('grip' + s).style.width = clamp(g[0], 0, 100) + '%'; $('pull' + s).style.width = clamp(g[1], 0, 100) + '%'; }
+  });
+  let hint = '';
+  if (mode !== 'attract' && match.status === 'fight') {
+    if (gp[localIdx]) hint = '<b>Grabbed!</b> Tap Q, E, A or D fast, or hold S, to break free';
+    else if (gp[1 - localIdx]) hint = '<b>Holding on.</b> Hold R to pull them down. Let go of T to release';
+  }
+  if (hint !== lastHint) { lastHint = hint; $('hint').innerHTML = hint; $('hint').hidden = !hint; }
   $('banner').textContent = mode === 'attract' ? '' : match.msg;
   if (subTimer !== Infinity && subTimer > 0) { subTimer -= dt; if (subTimer <= 0) $('sub').textContent = ''; }
   if (mode === 'host' && remote.peer && subTimer === Infinity) { subTimer = 0; }
