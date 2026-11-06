@@ -76,6 +76,18 @@ input{font:600 16px var(--mono);letter-spacing:.2em;text-transform:uppercase;wid
 #hint{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(84px + env(safe-area-inset-bottom,0px));max-width:calc(100% - 32px);
   text-align:center;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:6px 12px;pointer-events:none}
 #hint b{color:var(--gold)}
+#closet{position:fixed;inset:0;display:flex;justify-content:flex-end;align-items:center;padding-inline:max(16px,env(safe-area-inset-right,0px))}
+.closet-card{width:min(360px,100%);max-height:calc(100% - 32px);overflow:auto;box-sizing:border-box;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px;display:flex;flex-direction:column;gap:14px}
+.ctitle{font-family:var(--display);font-size:18px;letter-spacing:.02em;text-transform:none;color:var(--ink)}
+.opt{display:flex;flex-direction:column;gap:6px}
+.opt h3{margin:0;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);font-weight:600}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chips button{padding:6px 10px;font-size:12px}
+.chips button[aria-pressed="true"],.swatches button[aria-pressed="true"]{border-color:var(--gold);background:rgba(232,163,61,.16);color:var(--gold)}
+.swatches{display:flex;flex-wrap:wrap;gap:8px}
+.swatches button{width:30px;height:30px;padding:0;border-radius:50%;border:2px solid var(--line)}
+.swatches button[aria-pressed="true"]{box-shadow:0 0 0 2px var(--bg),0 0 0 4px var(--gold)}
+@media (max-width:720px){#closet{align-items:flex-end;justify-content:center;padding-bottom:calc(12px + env(safe-area-inset-bottom,0px))}.closet-card{max-height:56%}}
 @media (pointer:fine){#touchNote{display:none}}
 @media (prefers-reduced-motion:reduce){.hp i{transition:none}}
 </style>
@@ -100,6 +112,19 @@ input{font:600 16px var(--mono);letter-spacing:.2em;text-transform:uppercase;wid
   <span><kbd>←</kbd><kbd>→</kbd> turn</span><span><kbd>↑</kbd><kbd>↓</kbd> camera</span>
 </div>
 
+<div id="closet" hidden>
+  <div class="closet-card" role="dialog" aria-label="Customize your fighter">
+    <h2 class="ctitle">Your fighter</h2>
+    <div class="opt"><h3>Race</h3><div class="chips" id="optRace"></div><p class="note" id="raceNote"></p></div>
+    <div class="opt"><h3>Body</h3><div class="chips" id="optBody"></div></div>
+    <div class="opt"><h3 id="skinLabel">Skin</h3><div class="swatches" id="optSkin"></div></div>
+    <div class="opt"><h3>Hair</h3><div class="chips" id="optHair"></div></div>
+    <div class="opt"><h3>Hair color</h3><div class="swatches" id="optHc"></div></div>
+    <div class="opt"><h3>Facial hair</h3><div class="chips" id="optBeard"></div></div>
+    <div class="row"><button id="bRandom">Randomize</button><button class="go" id="bDone">Done</button></div>
+  </div>
+</div>
+
 <div id="menu">
   <div class="card">
     <h1>BONK <span>BR</span><em>AWL</em></h1>
@@ -111,6 +136,10 @@ input{font:600 16px var(--mono);letter-spacing:.2em;text-transform:uppercase;wid
         <button id="gmClassic" aria-pressed="true"><b>Classic</b><span>K.O. or ring-out</span></button>
         <button id="gmKo" aria-pressed="false"><b>Knockout only</b><span>Roped ring, no ring-outs</span></button>
       </div>
+    </div>
+    <div class="grp">
+      <h2>Your fighter</h2>
+      <div class="row" style="align-items:center"><p class="note" id="lookSummary" style="flex:1 1 160px"></p><button id="bCustomize">Customize</button></div>
     </div>
     <div class="grp">
       <h2>Solo</h2>
@@ -273,6 +302,7 @@ class Fighter {
     });
     this.walkPhase = 0;
     this.grab = null;
+    this.power = 1; this.speed = 1;
   }
   reset(x, z, yaw) {
     const T = this.torso;
@@ -316,7 +346,7 @@ class Fighter {
         this.grounded = true;
       }
       if (this.grounded && this.stun <= 0) {
-        const sp = mv > 0 ? 3.6 : 2.6;
+        const sp = (mv > 0 ? 3.6 : 2.6) * this.speed;
         T.force.x += (Math.sin(inp.yaw) * mv * sp - T.velocity.x) * this.mass * 7;
         T.force.z += (Math.cos(inp.yaw) * mv * sp - T.velocity.z) * this.mass * 7;
       }
@@ -446,11 +476,38 @@ for (let i = 0; i < 10; i++) {
   p.position.set(Math.cos(a) * 18, h/2 - 12, Math.sin(a) * 18); scene.add(p);
 }
 
+// ---------- looks ----------
+const RACES = {
+  human: { label:'Human', power:1, speed:1, skins:[0xf1c7a5, 0xe0ac85, 0xc68a5e, 0x8d5a3b, 0x5e3a24] },
+  alien: { label:'Alien', power:1, speed:1, skins:[0x8fd694, 0x9fb7c9, 0xb79fe0, 0x6fc7c2, 0xc9c27a] },
+  beast: { label:'Beast', power:1.3, speed:0.78, skins:[0x8a5a34, 0x3e3430, 0xb08a5a, 0xd8d0c4, 0x9a4a2a] },
+};
+const HAIRS = { bald:'Bald', buzz:'Buzz', short:'Short', spiky:'Spiky', mohawk:'Mohawk', afro:'Afro', long:'Long' };
+const BEARDS = { none:'None', stubble:'Stubble', mustache:'Mustache', goatee:'Goatee', full:'Full beard' };
+const BODIES = { slim:'Slim', average:'Average', heavy:'Heavy' };
+const HAIR_COLORS = [0x17120f, 0x5a3520, 0xa8672f, 0xe0c068, 0xd8d6d0, 0xd8483a, 0x3a7bd5];
+const TEAMS = [{ team:0xe2553d, shorts:0x2b2f3a }, { team:0x3d8be2, shorts:0xf3efe6 }];
+const pickKey = (obj, v, d) => Object.prototype.hasOwnProperty.call(obj, v) ? v : d;
+const pickIdx = (v, n) => Number.isInteger(v) && v >= 0 && v < n ? v : 0;
+// Looks arrive from other players online, so every field is checked against the known options.
+function cleanLook(o) {
+  o = o && typeof o === 'object' ? o : {};
+  return { race:pickKey(RACES, o.race, 'human'), body:pickKey(BODIES, o.body, 'average'), hair:pickKey(HAIRS, o.hair, 'short'),
+    beard:pickKey(BEARDS, o.beard, 'none'), skin:pickIdx(o.skin, 5), hc:pickIdx(o.hc, HAIR_COLORS.length) };
+}
+const rnd = a => a[Math.floor(Math.random() * a.length)];
+function randomLook() {
+  return cleanLook({ race:rnd(['human','human','alien','beast']), body:rnd(Object.keys(BODIES)), hair:rnd(Object.keys(HAIRS)),
+    beard:rnd(['none','none','stubble','mustache','goatee','full']), skin:Math.floor(Math.random() * 5), hc:Math.floor(Math.random() * HAIR_COLORS.length) });
+}
+
 // Visual-only: physics stays the simple box-and-stick rig, so these meshes must keep the same pivots and lengths.
-function fighterMeshes(look) {
-  const M = (color, rough = 0.6) => new THREE.MeshStandardMaterial({ color, roughness: rough });
-  const skin = M(look.skin, 0.55), shirt = M(look.team, 0.7), shorts = M(look.shorts, 0.8), hair = M(look.hair, 0.9);
-  const glove = M(look.team, 0.35), shoe = M(0x22252e, 0.5), sock = M(0xf1ede4, 0.9), white = M(0xffffff, 0.3), ink = M(0x16181d, 0.3);
+function fighterMeshes(idx, look) {
+  const M = (color, rough = 0.6, extra) => new THREE.MeshStandardMaterial({ color, roughness: rough, ...extra });
+  const race = look.race, team = TEAMS[idx];
+  const skin = M(RACES[race].skins[look.skin], race === 'beast' ? 0.95 : 0.55), shirt = M(team.team, 0.7), shorts = M(team.shorts, 0.8);
+  const hairCol = HAIR_COLORS[look.hc], hair = M(hairCol, 0.9);
+  const glove = M(team.team, 0.35), shoe = M(0x22252e, 0.5), sock = M(0xf1ede4, 0.9), white = M(0xffffff, 0.3), ink = M(0x16181d, 0.3);
   const add = (parent, geo, mat, x = 0, y = 0, z = 0, shadow = true) => {
     const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z);
     if (shadow) { m.castShadow = true; m.receiveShadow = true; }
@@ -458,56 +515,132 @@ function fighterMeshes(look) {
   };
   const seg = (parent, rTop, rBot, yTop, yBot, mat) => add(parent, new THREE.CylinderGeometry(rTop, rBot, yTop - yBot, 14), mat, 0, (yTop + yBot) / 2, 0);
   const ball = (r, w = 14, h = 10) => new THREE.SphereGeometry(r, w, h);
+  const cone = (r, h, mat, x, y, z, rx = 0, rz = 0) => { const c = add(torso, new THREE.ConeGeometry(r, h, 8), mat, x, y, z, false); c.rotation.set(rx, 0, rz); return c; };
+  // Chest width, gut size and limb thickness per body type.
+  const B = { slim:{ w:0.86, gut:0.9, limb:0.88 }, average:{ w:1, gut:1, limb:1 }, heavy:{ w:1.14, gut:1.32, limb:1.16 } }[look.body];
+  const bulk = race === 'beast' ? 1.08 : 1;
 
   const torso = new THREE.Group();
-  const chest = seg(torso, 0.3, 0.22, 0.4, -0.12, shirt); chest.scale.z = 0.62;
-  const belly = seg(torso, 0.22, 0.24, -0.1, -0.26, shirt); belly.scale.z = 0.7;
-  const hips = seg(torso, 0.24, 0.23, -0.24, -0.44, shorts); hips.scale.z = 0.75;
-  add(torso, ball(0.12), shirt, 0.3, 0.3, 0);
-  add(torso, ball(0.12), shirt, -0.3, 0.3, 0);
-  add(torso, new THREE.BoxGeometry(0.06, 0.2, 0.02), M(0xf3efe6, 0.8), 0, 0.15, 0.19, false);
-  seg(torso, 0.07, 0.08, 0.5, 0.38, skin);
-  const head = add(torso, ball(0.2, 24, 18), skin, 0, 0.66, 0); head.scale.set(0.92, 1.1, 0.98);
-  const cap = add(torso, new THREE.SphereGeometry(0.21, 24, 12, 0, Math.PI * 2, 0, Math.PI * 0.5), hair, 0, 0.7, -0.01);
-  cap.scale.set(0.95, 1.05, 1.02); cap.rotation.x = -0.25;
-  for (const s of [1, -1]) {
-    add(torso, ball(0.04, 10, 8), skin, s * 0.18, 0.65, 0, false);
-    add(torso, ball(0.032, 10, 8), white, s * 0.07, 0.69, 0.165, false);
-    add(torso, ball(0.017, 8, 6), ink, s * 0.07, 0.69, 0.19, false);
-    const brow = add(torso, new THREE.BoxGeometry(0.07, 0.016, 0.02), hair, s * 0.07, 0.74, 0.18, false);
-    brow.rotation.z = s * 0.15;
+  const chest = seg(torso, 0.3 * B.w * bulk, 0.22 * B.w, 0.4, -0.12, shirt); chest.scale.z = 0.62;
+  const belly = seg(torso, 0.22 * B.w, 0.24 * B.gut, -0.1, -0.26, shirt); belly.scale.z = 0.7 * B.gut;
+  const hips = seg(torso, 0.24 * B.gut, 0.23, -0.24, -0.44, shorts); hips.scale.z = 0.75;
+  add(torso, ball(0.12 * B.limb * bulk), shirt, 0.3, 0.3, 0);
+  add(torso, ball(0.12 * B.limb * bulk), shirt, -0.3, 0.3, 0);
+  add(torso, new THREE.BoxGeometry(0.06, 0.2, 0.02), M(0xf3efe6, 0.8), 0, 0.15, 0.19 * Math.max(1, B.w * 0.98), false);
+  seg(torso, 0.07 * (race === 'alien' ? 0.7 : B.limb), 0.08 * B.limb, 0.5, 0.38, skin);
+
+  // Head: aliens get a tall cranium, beasts a broader skull.
+  const hs = race === 'alien' ? [1.12, 1.32, 1.08] : race === 'beast' ? [1, 1.05, 1] : [0.92, 1.1, 0.98];
+  const hy = race === 'alien' ? 0.7 : 0.66;
+  add(torso, ball(0.2, 24, 18), skin, 0, hy, 0).scale.set(...hs);
+
+  if (race === 'alien') {
+    for (const s of [1, -1]) {
+      const eye = add(torso, ball(0.085, 18, 12), ink, s * 0.088, 0.665, 0.17, false);
+      eye.scale.set(1, 0.58, 0.5); eye.rotation.z = s * -0.5;
+      add(torso, ball(0.014, 8, 6), white, s * 0.11, 0.69, 0.21, false);
+      const ant = add(torso, new THREE.CylinderGeometry(0.008, 0.008, 0.18, 6), skin, s * 0.08, 0.98, -0.02, false); ant.rotation.z = s * -0.35;
+      add(torso, ball(0.03, 10, 8), M(0xe8a33d, 0.4), s * 0.115, 1.06, -0.02, false);
+    }
+    add(torso, new THREE.BoxGeometry(0.05, 0.01, 0.02), ink, 0, 0.55, 0.19, false);
+  } else {
+    for (const s of [1, -1]) {
+      if (race === 'beast') cone(0.06, 0.16, skin, s * 0.14, 0.86, -0.02, 0, s * -0.35);
+      else add(torso, ball(0.04, 10, 8), skin, s * 0.18, 0.65, 0, false);
+      add(torso, ball(0.032, 10, 8), race === 'beast' ? M(0xf2c14e, 0.3) : white, s * 0.07, 0.69, 0.165, false);
+      add(torso, ball(0.017, 8, 6), ink, s * 0.07, 0.69, 0.19, false);
+      const brow = add(torso, new THREE.BoxGeometry(race === 'beast' ? 0.09 : 0.07, race === 'beast' ? 0.03 : 0.016, 0.03), race === 'beast' ? skin : hair, s * 0.07, 0.74, 0.18, false);
+      brow.rotation.z = s * (race === 'beast' ? -0.2 : 0.15);
+    }
+    if (race === 'beast') {
+      const muzzle = add(torso, ball(0.1, 16, 12), M(RACES.beast.skins[look.skin], 0.95), 0, 0.6, 0.15, false); muzzle.scale.set(1, 0.75, 0.95);
+      add(torso, ball(0.03, 10, 8), ink, 0, 0.635, 0.245, false);
+      for (const s of [1, -1]) cone(0.012, 0.05, white, s * 0.04, 0.54, 0.22, Math.PI, 0);
+    } else {
+      cone(0.028, 0.07, skin, 0, 0.64, 0.21, Math.PI / 2, 0);
+      add(torso, new THREE.BoxGeometry(0.08, 0.014, 0.02), ink, 0, 0.57, 0.185, false);
+    }
   }
-  add(torso, new THREE.ConeGeometry(0.028, 0.07, 8), skin, 0, 0.64, 0.21, false).rotation.x = Math.PI / 2;
-  add(torso, new THREE.BoxGeometry(0.08, 0.014, 0.02), ink, 0, 0.57, 0.185, false);
+
+  // Hair is modelled for a head centred at y 0.66; aliens' taller heads shift it up a little.
+  const hb = race === 'alien' ? 0.1 : 0;
+  const capGeo = (r, phiLen) => new THREE.SphereGeometry(r, 24, 12, 0, Math.PI * 2, 0, phiLen);
+  if (look.hair === 'buzz') { const c = add(torso, capGeo(0.205, Math.PI * 0.45), hair, 0, 0.69 + hb, -0.01); c.scale.set(0.95, 1.05, 1.02); c.rotation.x = -0.3; }
+  if (look.hair === 'short' || look.hair === 'spiky' || look.hair === 'long') {
+    const c = add(torso, capGeo(0.21, Math.PI * 0.5), hair, 0, 0.7 + hb, -0.01); c.scale.set(0.95, 1.05, 1.02); c.rotation.x = -0.25;
+  }
+  if (look.hair === 'spiky') {
+    for (let i = 0; i < 9; i++) {
+      const a = (i / 9) * Math.PI * 2, tilt = 0.7;
+      cone(0.045, 0.14, hair, Math.sin(a) * 0.1, 0.86 + hb, Math.cos(a) * 0.1 - 0.02, Math.cos(a) * tilt, -Math.sin(a) * tilt);
+    }
+    cone(0.05, 0.16, hair, 0, 0.9 + hb, -0.02);
+  }
+  if (look.hair === 'mohawk') {
+    for (let i = 0; i < 6; i++) {
+      const t = i / 5, a = (0.25 - t) * 2.2, y = 0.66 + Math.cos(a) * 0.235 + hb, z = Math.sin(a) * 0.235 - 0.02;
+      cone(0.04, 0.17, hair, 0, y, z, a, 0);
+    }
+  }
+  if (look.hair === 'afro') { const a = add(torso, ball(0.27, 20, 16), hair, 0, 0.8 + hb, -0.08); a.scale.z = 0.85; }
+  if (look.hair === 'long') { const l = seg(torso, 0.17, 0.14, 0.72 + hb, 0.36, hair); l.position.z = -0.12; l.scale.set(1.15, 1, 0.6); }
+
+  // Facial hair sits on the lower face, just proud of the skin.
+  const beardMat = M(hairCol, 0.95);
+  const lower = (r, from, opacity) => {
+    const m = add(torso, new THREE.SphereGeometry(r, 24, 12, -Math.PI * 0.15, Math.PI * 1.3, from, Math.PI - from),
+      opacity < 1 ? M(hairCol, 0.95, { transparent:true, opacity }) : beardMat, 0, 0.66, 0.005, false);
+    m.scale.set(0.95, 1.1, 1.02); return m;
+  };
+  if (look.beard === 'stubble') lower(0.203, Math.PI * 0.55, 0.45);
+  if (look.beard === 'full') { lower(0.215, Math.PI * 0.52, 1); add(torso, ball(0.07, 12, 8), beardMat, 0, 0.47, 0.13, false).scale.set(1.3, 1, 0.8); }
+  if (look.beard === 'mustache' || look.beard === 'full') {
+    for (const s of [1, -1]) { const m = add(torso, new THREE.BoxGeometry(0.07, 0.025, 0.03), beardMat, s * 0.035, 0.595, 0.19, false); m.rotation.z = s * -0.25; }
+  }
+  if (look.beard === 'goatee') { add(torso, ball(0.045, 12, 8), beardMat, 0, race === 'beast' ? 0.47 : 0.5, race === 'beast' ? 0.13 : 0.165, false).scale.set(1, 1.3, 0.8); }
 
   const parts = [torso];
+  const L = B.limb * bulk;
   for (const def of LIMBS) {
     const u = new THREE.Group(), l = new THREE.Group(), hu = def.up / 2, hl = def.lo / 2;
     if (def.arm) {
-      seg(u, 0.1, 0.09, hu + 0.04, hu - 0.14, shirt);
-      seg(u, 0.075, 0.066, hu - 0.12, -hu, skin);
-      add(u, ball(0.066), skin, 0, -hu, 0);
-      seg(l, 0.064, 0.05, hl, -hl + 0.08, skin);
+      seg(u, 0.1 * L, 0.09 * L, hu + 0.04, hu - 0.14, shirt);
+      seg(u, 0.075 * L, 0.066 * L, hu - 0.12, -hu, skin);
+      add(u, ball(0.066 * L), skin, 0, -hu, 0);
+      seg(l, 0.064 * L, 0.05 * L, hl, -hl + 0.08, skin);
       add(l, new THREE.CylinderGeometry(0.075, 0.075, 0.06, 12), M(0xf3efe6, 0.6), 0, -hl + 0.1, 0);
       const gl = add(l, ball(0.115), glove, 0, -hl, 0.01); gl.scale.set(1, 1.05, 1.15);
     } else {
-      seg(u, 0.12, 0.1, hu + 0.04, hu - 0.18, shorts);
-      seg(u, 0.1, 0.078, hu - 0.16, -hu, skin);
-      add(u, ball(0.079), skin, 0, -hu, 0.01);
-      seg(l, 0.076, 0.055, hl, -hl + 0.14, skin);
-      seg(l, 0.058, 0.055, -hl + 0.16, -hl + 0.04, sock);
-      add(l, new THREE.BoxGeometry(0.13, 0.08, 0.27), shoe, 0, -hl + 0.01, 0.06);
+      seg(u, 0.12 * B.limb, 0.1 * B.limb, hu + 0.04, hu - 0.18, shorts);
+      seg(u, 0.1 * L, 0.078 * L, hu - 0.16, -hu, skin);
+      add(u, ball(0.079 * L), skin, 0, -hu, 0.01);
+      seg(l, 0.076 * L, 0.055 * L, hl, -hl + 0.14, skin);
+      if (race === 'beast') add(l, new THREE.BoxGeometry(0.15, 0.08, 0.3), skin, 0, -hl + 0.01, 0.07);
+      else {
+        seg(l, 0.058, 0.055, -hl + 0.16, -hl + 0.04, sock);
+        add(l, new THREE.BoxGeometry(0.13, 0.08, 0.27), shoe, 0, -hl + 0.01, 0.06);
+      }
     }
     parts.push(u, l);
   }
   parts.forEach(p => scene.add(p));
   return parts;
 }
-const meshes = [
-  ...fighterMeshes({ team: 0xe2553d, skin: 0xe0ac85, hair: 0x5a3520, shorts: 0x2b2f3a }),
-  ...fighterMeshes({ team: 0x3d8be2, skin: 0x8d5a3b, hair: 0x17120f, shorts: 0xf3efe6 }),
-];
+const meshes = new Array(PER * 2);
+function disposeTree(o) { o.traverse(c => { if (c.geometry) c.geometry.dispose(); if (c.material) c.material.dispose(); }); }
+// Rebuilds one fighter's meshes and applies its race stats; physics bodies are untouched.
+function dress(i, look) {
+  look = cleanLook(look);
+  F[i].look = look; F[i].power = RACES[look.race].power; F[i].speed = RACES[look.race].speed;
+  for (let k = 0; k < PER; k++) { const m = meshes[i * PER + k]; if (m) { scene.remove(m); disposeTree(m); } }
+  fighterMeshes(i, look).forEach((m, k) => { meshes[i * PER + k] = m; });
+}
 const allBodies = [...F[0].all, ...F[1].all];
+let myLook = (() => {
+  try { const v = JSON.parse(localStorage.getItem('bonk-look')); if (v) return cleanLook(v); } catch (e) {}
+  return cleanLook({ race:'human', body:'average', hair:'short', beard:'none', skin:1, hc:1 });
+})();
+dress(0, myLook); dress(1, randomLook());
 
 const sparks = [];
 const sparkGeo = new THREE.SphereGeometry(0.2, 12, 8);
@@ -634,7 +767,7 @@ function resolveHits() {
     if (D.ko || match.status !== 'fight') continue;
     const isTorso = h.body === D.torso;
     const head = isTorso && h.y > D.torso.position.y + 0.45;
-    const dmg = Math.min(20, (h.v - 1.5) * 2.2) * (head ? 1.5 : isTorso ? 1 : 0.35) * (h.limb.arm ? 1 : 1.25);
+    const dmg = Math.min(20, (h.v - 1.5) * 2.2) * (head ? 1.5 : isTorso ? 1 : 0.35) * (h.limb.arm ? 1 : 1.25) * A.power;
     D.hp = Math.max(0, D.hp - dmg);
     D.stun = Math.max(D.stun, 0.2 + dmg / 30);
     if (D.grab && D.grab.body.fighter === A) D.grab.grip -= dmg * 3;
@@ -702,10 +835,11 @@ function grapple(inputs, dt) {
     const g = A.grab;
     let presses = 0;
     for (const k of STRUGGLE_KEYS) if (dInp[k] && !prev[k]) presses++;
-    g.grip -= presses * 14 + (dInp.bk ? 30 * dt : 0);
+    // A stronger fighter both holds on harder and struggles harder.
+    g.grip -= (presses * 14 + (dInp.bk ? 30 * dt : 0)) * D.power / A.power;
     g.pull = Math.max(0, g.pull - presses * 0.12);
     if (inp.pd) {
-      g.pull += dt * 1.1;
+      g.pull += dt * 1.1 * A.power;
       const tp = D.torso.position, dx = A.torso.position.x - tp.x, dz = A.torso.position.z - tp.z, n = Math.hypot(dx, dz) || 1;
       D.torso.force.x += dx/n * 150; D.torso.force.z += dz/n * 150;
       D.torso.force.y -= D.mass * GRAV * 0.5;
@@ -722,6 +856,7 @@ function holdInfo() {
   return [1, 0].map(j => F[j].grab ? [Math.max(0, Math.round(F[j].grab.grip)), Math.round(F[j].grab.pull * 100)] : 0);
 }
 function inputFor(i) {
+  if (dressing) return { yaw: i === 0 ? 0 : Math.PI };
   if (match.status !== 'fight') return { yaw: mode === 'attract' || (mode === 'cpu' && i === 1) ? ai[i].yaw : localYaw[i] };
   if (mode === 'attract') return aiInput(i, STEP);
   if (i === localIdx) return keyInput(i);
@@ -764,7 +899,7 @@ function sendHostState() {
     b.push(r3(p.x), r3(p.y), r3(p.z), r3(q.x), r3(q.y), r3(q.z), r3(q.w));
   }
   net.presence({ code, role:'host', s:{ b, h:[Math.round(F[0].hp), Math.round(F[1].hp)], sc:match.score, st:match.status, m:match.msg,
-    rd:match.round, hc:match.hits, hp:match.hit.map(r3), hb:!!match.hitBig, gm:gameMode, gp:holdInfo() } }).catch(() => {});
+    rd:match.round, hc:match.hits, hp:match.hit.map(r3), hb:!!match.hitBig, gm:gameMode, gp:holdInfo(), lk:[F[0].look, F[1].look] } }).catch(() => {});
 }
 function codeFor(p) { return p && p.presence && p.presence.code === code; }
 function hostPoll() {
@@ -772,6 +907,8 @@ function hostPoll() {
   if (g) {
     if (g.peer !== remote.peer) { remote.peer = g.peer; newMatch(); flashSub('Opponent joined'); }
     remote.input = decodeInput(g.presence.in);
+    const lk = JSON.stringify(cleanLook(g.presence.lk));
+    if (lk !== remote.lookKey) { remote.lookKey = lk; dress(1, JSON.parse(lk)); }
   } else if (remote.peer) {
     remote.peer = null; flashSub('Opponent left. Waiting for someone to join…', true);
   }
@@ -790,6 +927,10 @@ function guestPoll(dt) {
       if (!rp.has) { rp.p.copy(rp.tp); rp.q.copy(rp.tq); rp.has = true; }
     });
     guestView.h = Array.isArray(s.h) ? s.h.map(Number) : [100,100];
+    if (Array.isArray(s.lk) && s.lk.length === 2) {
+      const lk = JSON.stringify(s.lk.map(cleanLook));
+      if (lk !== guestView.lookKey) { guestView.lookKey = lk; const both = JSON.parse(lk); dress(0, both[0]); dress(1, both[1]); }
+    }
     guestView.gp = Array.isArray(s.gp) ? s.gp.map(v => Array.isArray(v) ? [Number(v[0]) || 0, Number(v[1]) || 0] : 0) : [0,0];
     if (Array.isArray(s.sc)) match.score = s.sc.map(Number);
     match.status = String(s.st); match.msg = typeof s.m === 'string' ? s.m.slice(0, 20) : '';
@@ -807,7 +948,7 @@ function guestPoll(dt) {
   const inp = keyInput(1), k = encodeInput(inp), now = performance.now();
   if (k !== remote.lastK || Math.abs(inp.yaw - remote.lastY) > 0.01 || now - remote.lastSend > 250) {
     remote.lastK = k; remote.lastY = inp.yaw; remote.lastSend = now;
-    net.presence({ code, role:'guest', in:{ k, y:r3(inp.yaw) } }).catch(() => {});
+    net.presence({ code, role:'guest', in:{ k, y:r3(inp.yaw) }, lk:myLook }).catch(() => {});
   }
 }
 let subTimer = 0;
@@ -815,7 +956,7 @@ function flashSub(text, sticky) { $('sub').textContent = text; subTimer = sticky
 
 // ---------- menu ----------
 async function leaveNet() {
-  if (net) { const n = net; net = null; try { if (n !== room) await n.leave(); else await room.presence({ code:null, role:null, s:null, in:null }); } catch (e) {} }
+  if (net) { const n = net; net = null; try { if (n !== room) await n.leave(); else await room.presence({ code:null, role:null, s:null, in:null, lk:null }); } catch (e) {} }
   remote.peer = null; remote.lastS = null; code = '';
 }
 async function start(m, c) {
@@ -825,6 +966,8 @@ async function start(m, c) {
   $('tagA').textContent = m === 'guest' ? 'HOST' : 'YOU';
   $('tagB').textContent = m === 'guest' ? 'YOU' : m === 'cpu' ? 'CPU' : m === 'dummy' ? 'DUMMY' : 'RIVAL';
   $('sub').textContent = '';
+  if (m === 'guest') { dress(1, myLook); dress(0, randomLook()); } else { dress(0, myLook); dress(1, randomLook()); }
+  remote.lookKey = ''; guestView.lookKey = '';
   newMatch();
   if (m === 'host' || m === 'guest') {
     code = c;
@@ -862,8 +1005,59 @@ $('bJoin').onclick = () => {
 $('codeIn').addEventListener('keydown', e => { if (e.key === 'Enter') $('bJoin').click(); });
 $('menuBtn').onclick = async () => {
   await leaveNet();
-  mode = 'attract'; localIdx = 0; newMatch();
+  mode = 'attract'; localIdx = 0;
+  dress(0, myLook); dress(1, randomLook()); newMatch();
   $('menu').hidden = false; $('menuBtn').hidden = true; $('legend').hidden = true; $('codechip').hidden = true; $('sub').textContent = '';
+};
+
+// ---------- customize ----------
+let dressing = false;
+const RACE_NOTES = { human:'Balanced all-rounder.', alien:'Same strength and speed as a Human.', beast:'Hits about 30% harder and grabs harder, but walks about 22% slower.' };
+const hex = c => '#' + c.toString(16).padStart(6, '0');
+function chipRow(el, options, key) {
+  el.replaceChildren(...Object.entries(options).map(([v, label]) => {
+    const b = document.createElement('button');
+    b.textContent = label; b.setAttribute('aria-pressed', String(myLook[key] === v));
+    b.onclick = () => { myLook[key] = v; lookChanged(); };
+    return b;
+  }));
+}
+function swatchRow(el, colors, key, name) {
+  el.replaceChildren(...colors.map((c, i) => {
+    const b = document.createElement('button');
+    b.style.background = hex(c); b.setAttribute('aria-label', name + ' ' + (i + 1)); b.setAttribute('aria-pressed', String(myLook[key] === i));
+    b.onclick = () => { myLook[key] = i; lookChanged(); };
+    return b;
+  }));
+}
+function lookSummary(l) { return [RACES[l.race].label, BODIES[l.body], HAIRS[l.hair] + (l.hair === 'bald' ? '' : ' hair'), l.beard === 'none' ? 'clean-shaven' : BEARDS[l.beard].toLowerCase()].join(' · '); }
+function renderCloset() {
+  chipRow($('optRace'), Object.fromEntries(Object.entries(RACES).map(([k, r]) => [k, r.label])), 'race');
+  chipRow($('optBody'), BODIES, 'body');
+  chipRow($('optHair'), HAIRS, 'hair');
+  chipRow($('optBeard'), BEARDS, 'beard');
+  swatchRow($('optSkin'), RACES[myLook.race].skins, 'skin', myLook.race === 'beast' ? 'Fur color' : 'Skin tone');
+  swatchRow($('optHc'), HAIR_COLORS, 'hc', 'Hair color');
+  $('skinLabel').textContent = myLook.race === 'beast' ? 'Fur' : 'Skin';
+  $('raceNote').textContent = RACE_NOTES[myLook.race];
+}
+function lookChanged() {
+  myLook = cleanLook(myLook);
+  try { localStorage.setItem('bonk-look', JSON.stringify(myLook)); } catch (e) {}
+  dress(0, myLook); renderCloset();
+  $('lookSummary').textContent = lookSummary(myLook);
+}
+$('lookSummary').textContent = lookSummary(myLook);
+$('bCustomize').onclick = () => {
+  dressing = true; dress(0, myLook); resetRound(); renderCloset();
+  $('menu').hidden = true; $('closet').hidden = false;
+  $('bDone').focus({ preventScroll: true });
+};
+$('bRandom').onclick = () => { myLook = randomLook(); lookChanged(); };
+$('bDone').onclick = () => {
+  dressing = false; newMatch();
+  $('closet').hidden = true; $('menu').hidden = false;
+  $('bCustomize').focus();
 };
 
 // ---------- main loop ----------
@@ -894,7 +1088,14 @@ function frame(now) {
     if (k >= 1) { scene.remove(s); s.material.dispose(); sparks.splice(i, 1); }
   }
 
-  if (mode === 'attract') {
+  if (dressing) {
+    // Turntable close-up; on wide screens the fighter sits left of centre so the panel on the right doesn't cover it.
+    const p = renderPose[0].p, wide = camera.aspect > 1.1, sway = Math.sin(now / 1000 * 0.5) * 0.55;
+    const off = wide ? 0.75 : 0, dist = wide ? 2.7 : 3.4, ly = wide ? p.y + 0.15 : p.y - 0.25;
+    const k = 1 - Math.exp(-dt * 5);
+    camPos.lerp(new THREE.Vector3(p.x + Math.sin(sway) * dist + off, p.y + 0.45, p.z + Math.cos(sway) * dist), k);
+    camLook.lerp(new THREE.Vector3(p.x + off, ly, p.z), k);
+  } else if (mode === 'attract') {
     attractAng += dt * 0.15;
     camPos.lerp(new THREE.Vector3(Math.sin(attractAng) * 10, 5.5, Math.cos(attractAng) * 10), 0.05);
     camLook.lerp(new THREE.Vector3(0, 1, 0), 0.05);

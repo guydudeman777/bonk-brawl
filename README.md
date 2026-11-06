@@ -23,6 +23,18 @@ Live: https://bonk-brawl.bonkbrawl.workers.dev
 - **Knockout only**: a roped ring, so the only way to win is a K.O.
 - Solo against a CPU or a training dummy, or 1v1 online with a 4-letter room code.
 
+## Customization
+
+Open **Customize** from the menu to change your fighter. Your look is saved in your browser and sent to your opponent online.
+
+- **Race**: Human, Alien (same stats as Human), or Beast (hits about 30% harder and grabs harder, but walks about 22% slower).
+- **Body**: slim, average, or heavy (looks only).
+- **Hair**: bald, buzz, short, spiky, mohawk, afro, or long, in seven colors.
+- **Facial hair**: none, stubble, mustache, goatee, or full beard.
+- **Skin or fur**: five tones per race.
+
+Shirts and gloves keep the red and blue team colors so the two fighters are always easy to tell apart.
+
 ## How it's built
 
 - `public/index.html` is the whole game: rendering, physics, CPU and netcode.
