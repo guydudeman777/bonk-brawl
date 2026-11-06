@@ -11,7 +11,7 @@ Live: https://bonk-brawl.bonkbrawl.workers.dev
 | W / S | Walk forward / back |
 | Q / E | Swing left / right arm |
 | A / D | Kick left / right leg |
-| X | Hold to grab and keep hold; let go to release |
+| X | Tap to grab and keep hold; tap again to let go |
 | Z | While holding on, hold to pull them down |
 | Q / E / A / D (tap) or S (hold) | Break free when grabbed |
 | ← / → | Turn |
