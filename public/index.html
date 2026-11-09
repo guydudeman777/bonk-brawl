@@ -371,7 +371,7 @@ class Fighter {
       L.heldT = 0;
     }
     for (const b of this.all) { b.velocity.set(0,0,0); b.angularVelocity.set(0,0,0); b.force.set(0,0,0); b.torque.set(0,0,0); }
-    this.hp = 100; this.ko = false; this.out = false; this.stun = 0; this.downed = 0; this.grabCool = 0; this.reachT = 0;
+    this.hp = 100; this.ko = false; this.out = false; this.hitBy = null; this.stun = 0; this.downed = 0; this.grabCool = 0; this.reachT = 0;
   }
   step(inp, dt) {
     const T = this.torso;
@@ -1025,46 +1025,215 @@ function nearestEnemy(i) {
 const heldBy = f => lineup().find(a => a.grab && a.grab.body.fighter === f);
 
 // ---------- CPU ----------
-const ai = F.map((f, i) => i % 2 ? Math.PI : 0).map(yaw => ({ yaw, t:1, hold:0, key:null, grabT:0, grabLen:0, letGo:0, takedown:false, mashT:0, mashOn:false, mashKey:'la' }));
-function aiInput(i, dt) {
-  const s = ai[i], tgt = nearestEnemy(i);
-  const inp = { yaw: s.yaw };
-  if (!tgt) return inp;
-  const me = F[i].torso.position, op = tgt.torso.position;
-  let want = Math.atan2(op.x - me.x, op.z - me.z);
-  // Steer round the grinder instead of walking straight into it.
-  if (arena === 'junk') {
-    const ax = me.x + Math.sin(want) * 1.3, az = me.z + Math.cos(want) * 1.3;
-    if (Math.abs(ax) < PIT + 0.5 && Math.abs(az) < PIT + 0.5) want += (me.x * Math.cos(want) - me.z * Math.sin(want) > 0 ? -1 : 1) * 1.1;
+// Each CPU rolls a temperament every round, so CPU-only fights don't all play out the same way.
+function newBrain(yaw) {
+  return { yaw, tgt:null, tgtT:0, foeHp:100, lastHp:100, quiet:0, plan:'wait', planT:0, pressT:0, combo:0, key:null, hold:0, gap:0, lastArm:'ra',
+    grabT:0, grabLen:0, letGo:0, takedown:false, mashT:0, mashOn:false, mashKey:'la', cd:{ gr:0, pd:0 }, dodgeT:0, sawSwing:false, prop:null, propT:0, fetchT:0, fetchCd:0, escT:0,
+    side:Math.random() < 0.5 ? 1 : -1, aggr:0.45 + Math.random() * 0.5, dodge:0.15 + Math.random() * 0.4, kicky:Math.random(), grabby:Math.random(),
+    junky:0.4 + Math.random() * 0.6, kamikaze:Math.random() < 0.3 };
+}
+const ai = F.map((f, i) => newBrain(i % 2 ? Math.PI : 0));
+const isHuman = f => roster.ctl[f.idx] === 'local' || roster.ctl[f.idx] === 'seat' && !!(seats[f.idx] && seats[f.idx].peer);
+// Distance to the nearest place a fighter can lose by falling (mat edge in Classic, the grinder pit), with n pointing toward it.
+function hazard(x, z) {
+  let d = Infinity, nx = 0, nz = 0;
+  const ax = Math.abs(x), az = Math.abs(z);
+  if (gameMode !== 'ko') { if (ax > az) { d = PLAT - ax; nx = Math.sign(x); } else { d = PLAT - az; nz = Math.sign(z); } }
+  if (arena === 'junk' && Math.max(ax, az) - PIT < d) { d = Math.max(ax, az) - PIT; nx = nz = 0; if (ax > az) nx = -Math.sign(x); else nz = -Math.sign(z); }
+  return { d, nx, nz };
+}
+function unsafeAt(x, z, avoidVest) {
+  if (hazard(x, z).d < 0.4) return true;
+  return avoidVest && vest.state === 1 && Math.hypot(x - vest.x, z - vest.z) < 0.9;
+}
+function pickTarget(i, s) {
+  const me = F[i], p = me.torso.position, piled = new Map();
+  for (const f of lineup()) if (f !== me && f.team === me.team && alive(f) && roster.ctl[f.idx] === 'cpu' && ai[f.idx].tgt) piled.set(ai[f.idx].tgt, (piled.get(ai[f.idx].tgt) || 0) + 1);
+  let best = null, bs = Infinity;
+  for (const f of enemiesOf(me)) {
+    const q = f.torso.position;
+    // Closer, weaker, already-chosen and revenge targets win; allies spread out instead of all mobbing one fighter.
+    let sc = Math.hypot(q.x - p.x, q.z - p.z) + f.hp / 60 + (piled.get(f) || 0) * 1.2;
+    if (f === s.tgt) sc -= 1.5;
+    if (f === me.hitBy) sc -= 1.5;
+    // Turn on whoever is coming for you: chasing someone who is chasing someone else makes a loop where nobody catches anyone.
+    if (roster.ctl[f.idx] === 'cpu' && ai[f.idx].tgt === me) sc -= 1.5;
+    if (sc < bs) { bs = sc; best = f; }
   }
-  s.yaw = wrap(s.yaw + clamp(wrap(want - s.yaw), -3*dt, 3*dt));
-  inp.yaw = s.yaw;
-  const dist = Math.hypot(op.x - me.x, op.z - me.z);
-  if (heldBy(F[i])) {
+  return best;
+}
+function crowdTarget(me) {
+  let best = null, bc = -1;
+  for (const f of enemiesOf(me)) {
+    const q = f.torso.position, c = lineup().filter(g => g !== me && g !== f && alive(g) && Math.hypot(g.torso.position.x - q.x, g.torso.position.z - q.z) < 4).length;
+    if (c > bc) { bc = c; best = f; }
+  }
+  return best;
+}
+function aiInput(i, dt) {
+  const s = ai[i], me = F[i], P = me.torso.position, inp = { yaw: s.yaw };
+  for (const k in s.cd) s.cd[k] -= dt;
+  const tap = k => { if (s.cd[k] <= 0) { inp[k] = true; s.cd[k] = 0.7; } };
+  const toward = (x, z) => Math.atan2(x - P.x, z - P.z);
+  const distTo = (x, z) => Math.hypot(x - P.x, z - P.z);
+  let want = s.yaw, move = 0, avoidVest = true, close = false;
+  const finish = () => {
+    // Steer round hazards only while travelling: up close it would circle a foe standing by the edge forever, so there it just stops short.
+    // A step already on the lip is fine as long as it heads away from the drop.
+    const here = hazard(P.x, P.z).d;
+    const stepOk = (dir, len) => { const x = P.x + Math.sin(dir) * len, z = P.z + Math.cos(dir) * len; return !unsafeAt(x, z, avoidVest) || hazard(x, z).d > here + 0.05; };
+    if (move > 0 && !close) {
+      const tries = [0, 0.5 * s.side, -0.5 * s.side, 1 * s.side, -1 * s.side, 1.6 * s.side, -1.6 * s.side, 2.2 * s.side, -2.2 * s.side];
+      const ok = tries.find(o => stepOk(want + o, 0.5) && stepOk(want + o, 1.2));
+      if (ok !== undefined) want += ok;
+    }
+    s.yaw = wrap(s.yaw + clamp(wrap(want - s.yaw), -3.2 * dt, 3.2 * dt));
+    inp.yaw = s.yaw;
+    // Walking while still turning swings a CPU wide, and two of them doing it orbit each other forever, so turn first.
+    const aimed = Math.abs(wrap(want - s.yaw)) < 0.6;
+    if (move > 0 && aimed && stepOk(s.yaw, 0.5)) inp.fw = true;
+    if (move < 0 && aimed && stepOk(s.yaw + Math.PI, 0.5)) inp.bk = true;
+    return inp;
+  };
+  s.quiet += dt;
+  if (me.hp < s.lastHp) s.quiet = 0;
+  s.lastHp = me.hp;
+  if ((s.tgtT -= dt) <= 0 || !s.tgt || !alive(s.tgt)) {
+    s.tgt = pickTarget(i, s); s.tgtT = 0.5 + Math.random() * 0.5;
+    if (s.tgt) s.foeHp = s.tgt.hp;
+  }
+  const tgt = s.tgt;
+  if (!tgt) return inp;
+  if (tgt.hp < s.foeHp) s.quiet = 0;
+  s.foeHp = tgt.hp;
+  if (heldBy(me)) {
     // About two presses a second: a human grabber can still land a takedown if they commit to it quickly.
     s.mashT -= dt;
     if (s.mashT <= 0) { s.mashOn = !s.mashOn; s.mashT = 0.15 + Math.random() * 0.2; if (s.mashOn) s.mashKey = ['la','ra','ll','rl'][Math.floor(Math.random() * 4)]; }
     if (s.mashOn) inp[s.mashKey] = true;
     return inp;
   }
+
+  // The blast hits everyone, allies included, so wearers go where the most fighters are and everyone else scatters.
+  const wearer = vest.state === 2 ? F[vest.wearer] : null;
+  if (wearer === me) {
+    const c = crowdTarget(me) || tgt, q = c.torso.position;
+    want = toward(q.x, q.z); move = 1;
+    if (!me.grab && distTo(q.x, q.z) < 1) tap('gr');
+    return finish();
+  }
+  if (wearer && wearer.active && distTo(wearer.torso.position.x, wearer.torso.position.z) < 6.5) {
+    const w = wearer.torso.position;
+    want = Math.atan2(P.x - w.x, P.z - w.z); move = 1;
+    if (me.grab) tap('gr');
+    return finish();
+  }
+  if (vest.state === 1 && s.kamikaze && me.hp < 40) {
+    avoidVest = false; want = toward(vest.x, vest.z); move = 1;
+    return finish();
+  }
+
+  const q = tgt.torso.position, d = distTo(q.x, q.z);
+  if (me.grab && me.grab.prop) {
+    s.propT += dt; s.prop = null;
+    want = toward(q.x, q.z); move = d < 1.6 ? -1 : d > 7 ? 1 : 0;
+    if (Math.abs(wrap(want - s.yaw)) < 0.15 && d < 7 || s.propT > 4) tap('pd');
+    return finish();
+  }
+  s.propT = 0;
+  s.fetchCd -= dt;
+  if (arena === 'junk' && !me.grab && !s.prop && s.grabT <= 0 && d > 2.2 && s.fetchCd <= 0 && s.quiet < 5 && Math.random() < dt * s.junky) {
+    let bd = Math.min(4, d - 0.5);
+    for (const pr of props) {
+      const b = pr.body.position, pd = distTo(b.x, b.z);
+      if (pd < bd && b.y > -0.3 && !inPit(b.x, b.z) && !pr.thrownBy && !lineup().some(f => f.grab && f.grab.prop === pr)) { bd = pd; s.prop = pr; s.fetchT = 0; }
+    }
+  }
+  if (s.prop) {
+    const pr = s.prop, b = pr.body.position, pd = distTo(b.x, b.z);
+    // A foe closing in means fight now; a fetch that keeps failing would otherwise repeat forever with the foe in tow.
+    if ((s.fetchT += dt) > 3.5 || d < 1.8 || b.y < -0.3 || lineup().some(f => f.grab && f.grab.prop === pr)) { s.prop = null; s.fetchCd = 3; }
+    else {
+      want = toward(b.x, b.z); move = pd > 0.75 ? 1 : 0;
+      if (pd < 1 && Math.abs(wrap(want - s.yaw)) < 0.35) tap('gr');
+      return finish();
+    }
+  }
+
+  // Grab is a toggle, so the CPU taps once to go in and taps again when it's done holding.
   if (s.grabT > 0) {
-    // Grab is a toggle, so the CPU taps once to go in and taps again when it's done holding.
-    s.grabT -= dt; inp.gr = s.grabT > s.grabLen - 0.1;
-    if (dist > 0.8) inp.fw = true;
-    if (F[i].grab && s.takedown) inp.pd = true;
-    if (s.grabT <= 0 && F[i].grab) s.letGo = 0.1;
-    return inp;
+    s.grabT -= dt; want = toward(q.x, q.z);
+    if (s.grabT > s.grabLen - 0.1) inp.gr = true;
+    if (d > 0.8) move = 1;
+    if (me.grab && s.takedown) inp.pd = true;
+    if (s.grabT <= 0 && me.grab) s.letGo = 0.1;
+    return finish();
   }
-  if (s.letGo > 0) { s.letGo -= dt; if (F[i].grab) inp.gr = true; return inp; }
-  if (dist < 1.3 && s.hold <= 0 && Math.random() < dt * 0.35) { s.grabLen = s.grabT = 1.6 + Math.random() * 1.2; s.takedown = Math.random() < 0.6; return inp; }
-  if (dist > 1.5) inp.fw = true; else if (dist < 0.9) inp.bk = true;
-  s.t -= dt;
-  if (s.hold > 0) { s.hold -= dt; inp[s.key] = true; }
-  else if (s.t <= 0 && dist < 2.3) {
-    s.key = ['la','ra','la','ra','ll','rl'][Math.floor(Math.random() * 6)];
-    s.hold = 0.22; s.t = 0.45 + Math.random() * 0.9;
+  if (s.letGo > 0) { s.letGo -= dt; if (me.grab) inp.gr = true; return finish(); }
+
+  const vsHuman = isHuman(tgt);
+  // Boredom: the longer nobody lands anything, the bolder the CPU gets, which is what breaks CPU-vs-CPU standoffs.
+  // Against people the CPU is calmer, with shorter combos and longer pauses, so there are openings to learn from.
+  const aggr = Math.min(1, s.aggr + clamp(s.quiet / 6, 0, 1) * 0.5) * (vsHuman ? 0.7 : 1);
+  want = toward(q.x, q.z);
+
+  // React once to each of the target's swings: back out of range, or swing back.
+  const swinging = tgt.limbs.some(L => L.striking);
+  if (swinging && !s.sawSwing && d < 1.2 && s.plan !== 'press') {
+    if (Math.random() < s.dodge * (vsHuman ? 0.6 : 1)) s.dodgeT = 0.3;
+    else if (Math.random() < aggr * 0.5) { s.plan = 'press'; s.combo = 1; s.pressT = 0; }
   }
-  return inp;
+  s.sawSwing = swinging;
+  if (s.dodgeT > 0) { s.dodgeT -= dt; move = -1; return finish(); }
+
+  if (d > 1.7) {
+    s.plan = 'wait'; s.planT = Math.min(s.planT, 0.3);
+    move = 1;
+    // Come at a foe near an edge or the pit from the safe side, so hits knock them toward it.
+    // Only whoever is on the outside flanks (otherwise two CPUs orbit each other), and boredom gives it up.
+    const th = hazard(q.x, q.z), inside = (P.x - q.x) * -th.nx + (P.z - q.z) * -th.nz > 0;
+    if (th.d < 2.5 && !inside && s.quiet < 4) { const ax = q.x - th.nx * 1.1, az = q.z - th.nz * 1.1; if (distTo(ax, az) > 0.5) want = toward(ax, az); }
+  }
+  // Backed up against a hazard by a foe with more room: work back toward open ground before fighting.
+  // Only briefly, and not with the foe on top of us: running along the edge with someone in tow is just another loop.
+  const mh = hazard(P.x, P.z);
+  const cornered = d > 1.4 && mh.d < 1.2 && hazard(q.x, q.z).d > mh.d + 0.4 && s.quiet < 4 && s.escT < 1.5;
+  s.escT = cornered ? s.escT + dt : Math.max(0, s.escT - dt * 0.25);
+  if (cornered) {
+    want = Math.atan2(-mh.nx, -mh.nz) + 0.7 * s.side; move = 1;
+    return finish();
+  }
+  if (d > 1.7) return finish();
+  close = true;
+
+  if (s.plan === 'wait') {
+    move = d > 1.5 ? 1 : d < 1.15 ? -1 : 0;
+    if ((s.planT -= dt) <= 0) {
+      if (d < 1.1 && Math.random() < s.grabby * 0.3) {
+        s.grabLen = s.grabT = 1.2 + Math.random() * 1.2; s.takedown = Math.random() < 0.7;
+        s.planT = 0.3;
+      } else { s.plan = 'press'; s.combo = (vsHuman ? 1 : 2) + Math.floor(Math.random() * (vsHuman ? 2 : 3)); s.pressT = 0; }
+    }
+  }
+  if (s.plan === 'press') {
+    // Walk in while swinging: strikes land from about 0.6 to 1 m; farther swings hit air, closer ones jam with no speed behind them.
+    s.pressT += dt;
+    move = d > 0.85 ? 1 : d < 0.65 ? -1 : 0;
+    if (s.hold > 0) { s.hold -= dt; inp[s.key] = true; }
+    else if (s.gap > 0) s.gap -= dt;
+    else if (s.combo > 0 && d < 1.1) {
+      const kick = Math.random() < 0.2 + s.kicky * 0.3 + (hazard(q.x, q.z).d < 2 ? 0.3 : 0);
+      s.key = kick ? (Math.random() < 0.5 ? 'll' : 'rl') : (s.lastArm = s.lastArm === 'la' ? 'ra' : 'la');
+      s.hold = kick ? 0.32 : 0.2; s.gap = 0.08 + Math.random() * 0.15; s.combo--;
+      inp[s.key] = true;
+    }
+    if (s.combo <= 0 && s.hold <= 0 || s.pressT > 2.5) { s.plan = 'back'; s.planT = (0.25 + Math.random() * 0.6) * (1.3 - aggr); }
+  } else if (s.plan === 'back') {
+    // Give ground after a combo; this is the human's window to counter.
+    move = d < 1.35 ? -1 : 0;
+    if ((s.planT -= dt) <= 0) { s.plan = 'wait'; s.planT = (0.2 + Math.random() * 0.8) * (1.2 - aggr) + (vsHuman ? 0.5 : 0); }
+  }
+  return finish();
 }
 function idleInput(i) {
   const tgt = nearestEnemy(i);
@@ -1083,7 +1252,7 @@ function resetRound() {
     if (i >= roster.n) { f.deactivate(); return; }
     const s = spawnOf(i);
     f.activate(); f.reset(s.x, s.z, s.yaw);
-    localYaw[i] = s.yaw; ai[i].yaw = s.yaw;
+    localYaw[i] = s.yaw; ai[i] = newBrain(s.yaw);
   });
   resetProps(); resetVest();
   match.status = 'ready'; match.timer = 1.2; match.msg = 'ROUND ' + match.round;
@@ -1128,7 +1297,7 @@ function resolveHits() {
     const isTorso = h.body === D.torso;
     const head = isTorso && h.y > D.torso.position.y + 0.45;
     const dmg = Math.min(20, (h.v - 1.5) * 2.2) * (head ? 1.5 : isTorso ? 1 : 0.35) * (h.limb.arm ? 1 : 1.25) * A.power;
-    D.hp = Math.max(0, D.hp - dmg);
+    D.hp = Math.max(0, D.hp - dmg); D.hitBy = A;
     D.stun = Math.max(D.stun, 0.2 + dmg / 30);
     if (D.grab && D.grab.body.fighter === A) D.grab.grip -= dmg * 3;
     const dx = D.torso.position.x - A.torso.position.x, dz = D.torso.position.z - A.torso.position.z, n = Math.hypot(dx, dz) || 1;
@@ -1277,7 +1446,7 @@ function resolvePropHits() {
     const A = h.prop.thrownBy, D = h.def;
     if (!A || !alive(D) || A === D || A.team === D.team || match.status !== 'fight') continue;
     const dmg = Math.min(25, (h.v - 3) * 3) * A.power, vel = h.prop.body.velocity, n = Math.hypot(vel.x, vel.z) || 1;
-    D.hp = Math.max(0, D.hp - dmg); D.stun = Math.max(D.stun, 0.3 + dmg / 25);
+    D.hp = Math.max(0, D.hp - dmg); D.hitBy = A; D.stun = Math.max(D.stun, 0.3 + dmg / 25);
     D.torso.applyImpulse(new CANNON.Vec3(vel.x / n * (dmg * 5 + 20), dmg * 2, vel.z / n * (dmg * 5 + 20)), D.torso.position);
     if (D.hp <= 0) knockOut(D);
     match.hits++; match.hit = [h.x, h.y, h.z]; match.hitBig = dmg > 12;
