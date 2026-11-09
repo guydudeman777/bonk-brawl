@@ -488,6 +488,48 @@ sun.shadow.mapSize.set(1024, 1024);
 Object.assign(sun.shadow.camera, { left:-9, right:9, top:9, bottom:-9, near:1, far:30 });
 scene.add(sun);
 
+// ---------- mesh baking ----------
+// Every solid colour part shares this material: colour, roughness and metalness ride on the vertices so a whole body part is one draw call.
+const partMat = new THREE.MeshStandardMaterial({ vertexColors: true });
+partMat.userData.shared = true;
+partMat.onBeforeCompile = sh => {
+  sh.vertexShader = 'attribute vec2 rm;\nvarying vec2 vRM;\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n\tvRM = rm;');
+  sh.fragmentShader = 'varying vec2 vRM;\n' + sh.fragmentShader
+    .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = vRM.x;')
+    .replace('#include <metalnessmap_fragment>', 'float metalnessFactor = vRM.y;');
+};
+// Without a distinct key three would reuse the plain standard shader program, which has no rm attribute.
+partMat.customProgramCacheKey = () => 'part-rm';
+// Folds a group's plain-coloured child meshes into one mesh; textured or see-through children are kept as children of it.
+function bake(group, shadow = true) {
+  const pos = [], nor = [], col = [], rm = [], idx = [], keep = [], v = new THREE.Vector3(), nm = new THREE.Matrix3();
+  for (const c of group.children) {
+    const m = c.material;
+    if (!c.isMesh || !m.isMeshStandardMaterial || m.map || m.transparent) { keep.push(c); continue; }
+    c.updateMatrix(); nm.getNormalMatrix(c.matrix);
+    const g = c.geometry, P = g.attributes.position, N = g.attributes.normal, base = pos.length / 3;
+    for (let i = 0; i < P.count; i++) {
+      v.fromBufferAttribute(P, i).applyMatrix4(c.matrix); pos.push(v.x, v.y, v.z);
+      v.fromBufferAttribute(N, i).applyMatrix3(nm).normalize(); nor.push(v.x, v.y, v.z);
+      col.push(m.color.r, m.color.g, m.color.b); rm.push(m.roughness, m.metalness);
+    }
+    if (g.index) for (let i = 0; i < g.index.count; i++) idx.push(base + g.index.getX(i));
+    else for (let i = 0; i < P.count; i++) idx.push(base + i);
+    g.dispose(); if (!m.userData.shared) m.dispose();
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  geo.setAttribute('rm', new THREE.Float32BufferAttribute(rm, 2));
+  geo.setIndex(idx);
+  const out = new THREE.Mesh(geo, partMat);
+  out.position.copy(group.position); out.quaternion.copy(group.quaternion); out.scale.copy(group.scale);
+  out.castShadow = out.receiveShadow = shadow; out.visible = group.visible; out.userData = group.userData;
+  for (const c of keep) out.add(c);
+  return out;
+}
+
 function matTexture() {
   const c = document.createElement('canvas'); c.width = c.height = 512;
   const g = c.getContext('2d');
@@ -503,8 +545,8 @@ function matTexture() {
 const mat = new THREE.Mesh(new THREE.BoxGeometry(PLAT*2, 1, PLAT*2),
   [0,1,2,3,4,5].map(i => i === 2 ? new THREE.MeshStandardMaterial({ map: matTexture(), roughness: 0.9 }) : new THREE.MeshStandardMaterial({ color: 0x23302f, roughness: 0.9 })));
 mat.position.y = -0.5; mat.receiveShadow = true; scene.add(mat);
-const ring = new THREE.Group();
-{
+const ring = bake((() => {
+  const ring = new THREE.Group();
   const postMat = new THREE.MeshStandardMaterial({ color: 0xd8d2c4, roughness: 0.5 });
   const padMats = [0xe2553d, 0x3d8be2, 0xe2553d, 0x3d8be2].map(c => new THREE.MeshStandardMaterial({ color: c, roughness: 0.6 }));
   const ropeMat = new THREE.MeshStandardMaterial({ color: 0xf3efe6, roughness: 0.4 });
@@ -524,8 +566,9 @@ const ring = new THREE.Group();
       rope.castShadow = true; ring.add(rope);
     }
   }
-  ring.visible = false; scene.add(ring);
-}
+  return ring;
+})());
+ring.visible = false; scene.add(ring);
 // ---------- junkyard visuals ----------
 function canvasTex(w, h, draw) { const c = document.createElement('canvas'); c.width = w; c.height = h; draw(c.getContext('2d'), w, h); const t = new THREE.CanvasTexture(c); t.anisotropy = 4; return t; }
 const rustTex = canvasTex(256, 256, (g, w, h) => {
@@ -558,8 +601,9 @@ const rollers = [0.6, -0.6].map((z, k) => {
     const t = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.16, 0.08), tooth), a = i / 10 * Math.PI * 2 + j * 0.3;
     t.position.set(-PIT + 0.3 + j * (PIT * 2 - 0.6) / 3, Math.cos(a) * 0.4, Math.sin(a) * 0.4); t.rotation.x = -a; g.add(t);
   }
-  g.position.set(0, -1.05, z); g.userData.dir = k ? -1 : 1; junkVis.add(g);
-  return g;
+  const r = bake(g, false);
+  r.position.set(0, -1.05, z); r.userData.dir = k ? -1 : 1; junkVis.add(r);
+  return r;
 });
 junkVis.visible = false; scene.add(junkVis);
 
@@ -580,11 +624,12 @@ const props = PROP_SPOTS.map(([x, z, kind]) => {
   let mesh;
   if (crate) mesh = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.52, 0.52), new THREE.MeshStandardMaterial({ map: crateTex, roughness: 0.8 }));
   else {
-    mesh = new THREE.Group();
-    mesh.add(new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.68, 16), new THREE.MeshStandardMaterial({ color: 0xb03a2e, roughness: 0.55, metalness: 0.3 })));
-    for (const y of [-0.2, 0.2]) { const band = new THREE.Mesh(new THREE.CylinderGeometry(0.228, 0.228, 0.04, 16), new THREE.MeshStandardMaterial({ color: 0x2b2f3a, roughness: 0.5 })); band.position.y = y; mesh.add(band); }
+    const g = new THREE.Group();
+    g.add(new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.68, 16), new THREE.MeshStandardMaterial({ color: 0xb03a2e, roughness: 0.55, metalness: 0.3 })));
+    for (const y of [-0.2, 0.2]) { const band = new THREE.Mesh(new THREE.CylinderGeometry(0.228, 0.228, 0.04, 16), new THREE.MeshStandardMaterial({ color: 0x2b2f3a, roughness: 0.5 })); band.position.y = y; g.add(band); }
+    mesh = bake(g);
   }
-  mesh.traverse(c => { c.castShadow = true; c.receiveShadow = true; });
+  mesh.castShadow = mesh.receiveShadow = true;
   mesh.visible = false; scene.add(mesh);
   const prop = { body, mesh, kind, home: [x, z], he, thrownBy: null, thrownT: 0, cool: 0, grindT: 0 };
   body.prop = prop;
@@ -601,25 +646,29 @@ const props = PROP_SPOTS.map(([x, z, kind]) => {
 const propPose = props.map(() => ({ p: new THREE.Vector3(), q: new THREE.Quaternion(), tp: new THREE.Vector3(), tq: new THREE.Quaternion(), has: false }));
 
 // ---------- bomb vest ----------
-const vestMesh = new THREE.Group();
-{
+const vestMesh = bake((() => {
+  const vestMesh = new THREE.Group();
   const cloth = new THREE.MeshStandardMaterial({ color: 0x4a5236, roughness: 0.9 }), stick = new THREE.MeshStandardMaterial({ color: 0xc8402e, roughness: 0.6 }), tape = new THREE.MeshStandardMaterial({ color: 0x2b2f3a, roughness: 0.7 });
   const body = new THREE.Mesh(new THREE.BoxGeometry(0.66, 0.52, 0.42), cloth); vestMesh.add(body);
   for (let i = -2; i <= 2; i++) { const d = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.36, 10), stick); d.position.set(i * 0.11, 0.02, 0.24); vestMesh.add(d); }
   for (const y of [-0.1, 0.12]) { const t = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.04, 0.04), tape); t.position.set(0, y, 0.27); vestMesh.add(t); }
   vestMesh.userData.light = new THREE.Mesh(new THREE.SphereGeometry(0.05, 10, 8), new THREE.MeshBasicMaterial({ color: 0xff3020 }));
   vestMesh.userData.light.position.set(0.18, 0.2, 0.3); vestMesh.add(vestMesh.userData.light);
-  vestMesh.traverse(c => { c.castShadow = true; });
-  vestMesh.visible = false; scene.add(vestMesh);
-}
+  vestMesh.userData.light.castShadow = true;
+  return vestMesh;
+})());
+vestMesh.visible = false; scene.add(vestMesh);
 const vestRing = new THREE.Mesh(new THREE.RingGeometry(0.55, 0.75, 32), new THREE.MeshBasicMaterial({ color: 0xff7a2e, transparent: true, opacity: 0.7, side: THREE.DoubleSide }));
 vestRing.rotation.x = -Math.PI / 2; vestRing.position.y = 0.03; vestRing.visible = false; scene.add(vestRing);
 
-const pillarMat = new THREE.MeshStandardMaterial({ color: 0x232a3a, roughness: 1 });
-for (let i = 0; i < 10; i++) {
-  const a = i / 10 * Math.PI * 2, h = 6 + (i * 7 % 5) * 2;
-  const p = new THREE.Mesh(new THREE.BoxGeometry(1.4, h, 1.4), pillarMat);
-  p.position.set(Math.cos(a) * 18, h/2 - 12, Math.sin(a) * 18); scene.add(p);
+{
+  const pillars = new THREE.Group(), pillarMat = new THREE.MeshStandardMaterial({ color: 0x232a3a, roughness: 1 });
+  for (let i = 0; i < 10; i++) {
+    const a = i / 10 * Math.PI * 2, h = 6 + (i * 7 % 5) * 2;
+    const p = new THREE.Mesh(new THREE.BoxGeometry(1.4, h, 1.4), pillarMat);
+    p.position.set(Math.cos(a) * 18, h/2 - 12, Math.sin(a) * 18); pillars.add(p);
+  }
+  scene.add(bake(pillars, false));
 }
 
 // ---------- looks ----------
@@ -642,7 +691,7 @@ const FFA = [
 ];
 // Slot i is on team i % 2 in 1v1 and 2v2; in free-for-all every slot is its own team.
 // ctl per slot: local (this keyboard), cpu, dummy, seat (an online friend, or a stand-in while the seat is empty), net (guest view).
-const roster = { n:2, ctl:['cpu','cpu'], ffa:false };
+const roster = { n:2, ctl:['cpu','cpu'], ffa:false, list:F.slice(0, 2) };
 const colorOf = idx => roster.ffa ? FFA[idx] : TEAMS[idx % 2];
 const hex = c => '#' + c.toString(16).padStart(6, '0');
 const pickKey = (obj, v, d) => Object.prototype.hasOwnProperty.call(obj, v) ? v : d;
@@ -701,7 +750,6 @@ function stickMeshes(idx, look) {
     else add(l, new THREE.BoxGeometry(0.1, 0.05, 0.2), ink, 0, -hl + 0.02, 0.05);
     parts.push(u, l);
   }
-  parts.forEach(m => scene.add(m));
   return parts;
 }
 // Visual-only: physics stays the simple box-and-stick rig, so these meshes must keep the same pivots and lengths.
@@ -828,26 +876,17 @@ function fighterMeshes(idx, look) {
     }
     parts.push(u, l);
   }
-  parts.forEach(p => scene.add(p));
   return parts;
 }
 const meshes = new Array(PER * 10);
-function disposeTree(o) { o.traverse(c => { if (c.geometry) c.geometry.dispose(); if (c.material) c.material.dispose(); }); }
+function disposeTree(o) { o.traverse(c => { if (c.geometry) c.geometry.dispose(); if (c.material && !c.material.userData.shared) c.material.dispose(); }); }
 // Rebuilds one fighter's meshes and applies its race stats; physics bodies are untouched.
 function dress(i, look) {
   look = cleanLook(look);
   F[i].look = look; F[i].power = RACES[look.race].power; F[i].speed = RACES[look.race].speed;
   for (let k = 0; k < PER; k++) { const m = meshes[i * PER + k]; if (m) { scene.remove(m); disposeTree(m); } }
-  fighterMeshes(i, look).forEach((m, k) => { meshes[i * PER + k] = m; });
-  if (roster.n >= 6) slimShadows(i);
-}
-// In six-fighter brawls only the big shapes cast shadows; the small details roughly double the shadow pass's draw calls for little visible gain.
-function slimShadows(i) {
-  for (let k = 0; k < PER; k++) meshes[i * PER + k].traverse(c => {
-    if (!c.isMesh) return;
-    if (!c.geometry.boundingSphere) c.geometry.computeBoundingSphere();
-    if (c.geometry.boundingSphere.radius * Math.max(c.scale.x, c.scale.y, c.scale.z) < (roster.n >= 8 ? 0.2 : 0.13)) c.castShadow = false;
-  });
+  // Fresh meshes default to visible, and the frame loop only places fighters in the lineup, so benched ones must start hidden.
+  fighterMeshes(i, look).forEach((g, k) => { const m = meshes[i * PER + k] = bake(g); m.visible = i < roster.n; scene.add(m); });
 }
 const allBodies = F.flatMap(f => f.all);
 let myLook = (() => {
@@ -876,6 +915,32 @@ function resize() {
   renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix();
 }
 addEventListener('resize', resize); resize();
+
+// Dynamic resolution: a slow GPU gets fewer pixels rather than a choppy fight.
+const RES_LEVELS = [1, 0.85, 0.7, 0.55];
+const res = { cap:1.25, level:0, minLevel:0, sum:0, n:0, good:0, before:0, rose:false, off:false };
+function applyPixelRatio() { renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, res.cap) * RES_LEVELS[res.level]); }
+function resetResolution() { Object.assign(res, { level:0, minLevel:0, sum:0, n:0, good:0, before:0, rose:false, off:false }); applyPixelRatio(); }
+function adaptResolution(ms) {
+  // Long gaps are tab switches or hitches, not steady load.
+  if (res.off || ms > 250) return;
+  res.sum += ms; res.n++;
+  if (res.sum < 2000) return;
+  const avg = res.sum / res.n; res.sum = res.n = 0;
+  // A drop that didn't help means pixels aren't the bottleneck (a 30 Hz cap, battery saver, a slow CPU), so restore them and stop.
+  if (res.before) {
+    const helped = avg < res.before * 0.9; res.before = 0;
+    if (!helped) { res.level--; res.off = true; applyPixelRatio(); return; }
+  }
+  if (avg > 22 && res.level < RES_LEVELS.length - 1) {
+    // Struggling right after a step up means that level is too much for this device; don't try it again this match.
+    if (res.rose) res.minLevel = res.level + 1;
+    res.level++; res.before = avg; res.good = 0; res.rose = false; applyPixelRatio();
+  } else if (avg < 18) {
+    if (++res.good >= 3) res.rose = false;
+    if (res.good >= 6 && res.level > res.minLevel) { res.level--; res.good = 0; res.rose = true; applyPixelRatio(); }
+  }
+}
 
 // ---------- sound ----------
 let actx = null;
@@ -921,7 +986,8 @@ function decodeInput(o) {
 // ---------- lineup ----------
 let format = '1v1';
 const seats = {};
-const lineup = () => F.slice(0, roster.n);
+// Read many times per physics step, so it's rebuilt only when the roster changes; callers must not mutate it.
+const lineup = () => roster.list;
 function spawnOf(i) {
   if (roster.ffa) {
     const r = roster.n > 6 ? 4.8 : 3.4, a = i / roster.n * Math.PI * 2, x = Math.sin(a) * r, z = Math.cos(a) * r;
@@ -939,10 +1005,10 @@ function setRoster(ctl, ffa = false) {
   world.broadphase = roster.n <= 2 ? new CANNON.NaiveBroadphase() : new CANNON.SAPBroadphase(world);
   // Six fighters: refresh shadows every other frame and keep pixel density at 1 to protect the frame rate.
   renderer.shadowMap.autoUpdate = roster.n < 6;
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, roster.n >= 6 ? 1 : 1.25));
+  res.cap = roster.n >= 6 ? 1 : 1.25; applyPixelRatio();
+  roster.list = F.slice(0, roster.n);
   F.forEach((f, i) => {
     f.team = ffa ? i : i % 2;
-    if (roster.n >= 6 && i < roster.n) slimShadows(i);
     if (recolor && i < roster.n && f.look) dress(i, f.look);
     if (i >= roster.n) { for (const g of F) if (g.grab && (g === f || g.grab.body.fighter === f)) releaseGrab(g, 0); f.deactivate(); }
     for (let k = 0; k < PER; k++) meshes[i * PER + k].visible = i < roster.n;
@@ -1522,6 +1588,7 @@ async function start(m, c) {
   mode = solo[m] ? 'solo' : m;
   if (mode === 'host') format = hostFormat;
   localIdx = mode === 'guest' ? -1 : 0;
+  resetResolution();
   setRoster(solo[m] || (mode === 'host' ? hosted[format] : ['net', 'net']), m.startsWith('ffa') || mode === 'host' && format.startsWith('ffa'));
   if (mode === 'host') for (const i of SEAT_ORDER[format]) seats[i] = { peer:null, input:decodeInput(null), lookKey:'' };
   $('menu').hidden = true; $('menuBtn').hidden = false; $('legend').hidden = false;
@@ -1584,6 +1651,7 @@ $('arJunk').onclick = () => pickArena('junk');
 try { chosenArena = localStorage.getItem('bonk-arena') === 'junk' ? 'junk' : 'classic'; } catch (e) {}
 function toAttract() {
   mode = 'attract'; localIdx = 0; format = '1v1';
+  resetResolution();
   setArena(chosenArena);
   setRoster(['cpu', 'cpu'], false);
   dress(0, myLook); dress(1, randomLook()); newMatch();
@@ -1662,6 +1730,7 @@ function camIdx() {
   return 0;
 }
 function frame(now) {
+  adaptResolution(now - last);
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
   if (mode !== 'attract' && localIdx >= 0) {
     const turn = (keys.ArrowLeft ? 1 : 0) - (keys.ArrowRight ? 1 : 0);
