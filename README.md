@@ -12,7 +12,7 @@ Live: https://bonk-brawl.bonkbrawl.workers.dev
 | Q / E | Swing left / right arm |
 | A / D | Kick left / right leg |
 | X | Tap to grab and keep hold; tap again to let go |
-| Z | While holding on, hold to pull them down |
+| Z | While holding a fighter, hold to pull them down; while holding junk, throw it |
 | Q / E / A / D (tap) or S (hold) | Break free when grabbed |
 | ← / → | Turn |
 | ↑ / ↓ | Tilt the camera |
@@ -22,6 +22,13 @@ Live: https://bonk-brawl.bonkbrawl.workers.dev
 - **Classic**: win by knockout or by knocking your rival off the mat. Knockback grows with damage taken.
 - **Knockout only**: a roped ring, so the only way to win is a K.O.
 - Solo against a CPU, 2v2 or 3v3 with CPU partners, a 6- or 10-fighter free-for-all against CPUs, or against a training dummy.
+
+## Arenas
+
+- **Classic mat**: an open mat with no hazards.
+- **Junkyard**: a grinder pit in the middle chews up anyone who falls in (heavy damage every second) and spits them back out. Crates and barrels lie around the mat: walk up and tap X to pick one up, Z to throw it, X to drop it. Thrown junk hurts whoever it hits.
+
+**Bomb vest**: in about half of rounds a vest drops in once, in any arena. Whoever steps on it wears it, and 3.5 seconds later it explodes, knocking out the wearer and blasting everyone within about 6 m away.
 
 ## Online formats
 
