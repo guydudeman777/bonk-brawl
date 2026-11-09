@@ -69,3 +69,5 @@ npx cf dev
 ```bash
 npx cf deploy
 ```
+
+`public/index.html` is generated: the game body (the same file published on claude.ai) is wrapped with the icon and manifest tags by `scripts/build-page.sh path/to/game-body.html`. The icon is `public/favicon.svg`, with PNG and ICO copies for phones and older browsers.
