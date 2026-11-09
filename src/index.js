@@ -1,7 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 
 const ROOM = /^\/ws\/([a-z0-9][a-z0-9_.-]{0,47})$/;
-const MAX_PEERS = 10;
+const MAX_PEERS = 16;
 const MAX_MESSAGE = 4096;
 
 export default {

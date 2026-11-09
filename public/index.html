@@ -30,9 +30,10 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--bg);color:var(--
 .side{gap:10px}
 #hud.four .hp{height:10px}
 #hud.four .tag{font-size:11px}
-#hud.four ~ #menuBtn{top:calc(108px + env(safe-area-inset-top,0px))}
-#hud.six ~ #menuBtn{top:calc(150px + env(safe-area-inset-top,0px))}
 #hud.six .side{gap:8px}
+#hud.many .side{gap:5px}
+#hud.many .hp{height:7px;width:min(260px,100%)}
+#hud.many .tag{font-size:10px}
 .tag{font-family:var(--display);font-size:13px;letter-spacing:.06em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
 .side.a .tag{color:var(--red)} .side.b .tag{color:var(--blue)}
 .hp{width:min(340px,100%);height:14px;background:rgba(0,0,0,.45);border:2px solid var(--line);border-radius:3px;overflow:hidden}
@@ -51,7 +52,7 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--bg);color:var(--
 #legend{position:fixed;left:max(16px,env(safe-area-inset-left,0px));bottom:calc(16px + env(safe-area-inset-bottom,0px));display:flex;flex-wrap:wrap;gap:6px 12px;
   max-width:min(560px,calc(100% - 32px));color:var(--muted);font-size:12px;pointer-events:none}
 kbd{font-family:var(--mono);font-weight:600;color:var(--ink);border:1px solid var(--line);border-bottom-width:2px;border-radius:3px;padding:0 5px;background:rgba(0,0,0,.35)}
-#menuBtn{position:fixed;left:max(16px,env(safe-area-inset-left,0px));top:calc(56px + env(safe-area-inset-top,0px))}
+#menuBtn{position:fixed;left:50%;transform:translateX(-50%);top:calc(72px + env(safe-area-inset-top,0px))}
 button{font:600 13px var(--mono);color:var(--ink);background:rgba(255,255,255,.06);border:1px solid var(--line);border-radius:5px;padding:9px 14px;cursor:pointer}
 button:hover{background:rgba(255,255,255,.12)}
 button:focus-visible,input:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
@@ -149,15 +150,17 @@ input{font:600 16px var(--mono);letter-spacing:.2em;text-transform:uppercase;wid
     </div>
     <div class="grp">
       <h2>Solo</h2>
-      <div class="row"><button class="go" id="bCpu">Fight the CPU</button><button id="bDuo">2v2 with a CPU partner</button><button id="bFfa">Free-for-all vs 5 CPUs</button><button id="bDummy">Training dummy</button></div>
+      <div class="row"><button class="go" id="bCpu">Fight the CPU</button><button id="bDuo">2v2 with a CPU partner</button><button id="bTrio">3v3 with CPU partners</button><button id="bFfa">Free-for-all vs 5 CPUs</button><button id="bFfa10">10-player free-for-all</button><button id="bDummy">Training dummy</button></div>
     </div>
     <div class="grp">
       <h2>Online 1v1</h2>
       <div class="row seg" role="group" aria-label="Online format">
         <button id="fm1v1" aria-pressed="true"><b>1v1</b><span>You against one friend</span></button>
-        <button id="fmTeam" aria-pressed="false"><b>Team battle</b><span>2v2, up to 4 friends; CPUs fill empty seats</span></button>
+        <button id="fmTeam" aria-pressed="false"><b>2v2 teams</b><span>Up to 4 players; CPUs fill empty seats</span></button>
+        <button id="fmTeam3" aria-pressed="false"><b>3v3 teams</b><span>Up to 6 players; CPUs fill empty seats</span></button>
         <button id="fmCoop" aria-pressed="false"><b>Co-op vs CPU</b><span>You and a friend against two CPUs</span></button>
         <button id="fmFfa" aria-pressed="false"><b>Free-for-all</b><span>Up to 6 players; last one standing wins</span></button>
+        <button id="fmFfa10" aria-pressed="false"><b>Mega free-for-all</b><span>Up to 10 players. Chaos.</span></button>
       </div>
       <div class="row"><button id="bHost">Host a match</button></div>
       <div class="row" style="align-items:center"><label for="codeIn" class="note">Code</label><input id="codeIn" maxlength="4" autocomplete="off" spellcheck="false" placeholder="ABCD"><button id="bJoin">Join</button></div>
@@ -275,7 +278,7 @@ class Fighter {
   constructor(idx) {
     this.idx = idx; this.team = idx % 2;
     // One collision bit per fighter: everyone collides with the mat and with every other fighter, teammates included, but not themselves.
-    const group = 2 << idx, mask = 1 | (126 & ~group);
+    const group = 2 << idx, mask = 1 | (2046 & ~group);
     this.joints = []; this.active = false; this.out = false;
     const T = this.torso = new CANNON.Body({ mass: 10, angularDamping: 0.5, linearDamping: 0.05 });
     T.addShape(new CANNON.Box(new CANNON.Vec3(0.3,0.4,0.17)));
@@ -434,7 +437,7 @@ class Fighter {
     b.torque.x += 12 * c.x; b.torque.y += 12 * c.y; b.torque.z += 12 * c.z;
   }
 }
-const F = [0, 1, 2, 3, 4, 5].map(i => new Fighter(i));
+const F = [...Array(10).keys()].map(i => new Fighter(i));
 const alive = f => f.active && !f.out && !f.ko;
 
 // ---------- rendering ----------
@@ -514,6 +517,8 @@ const TEAMS = [{ team:0xe2553d, shorts:0x2b2f3a }, { team:0x3d8be2, shorts:0xf3e
 const FFA = [
   { team:0xe2553d, shorts:0x2b2f3a, name:'RED' }, { team:0x3d8be2, shorts:0xf3efe6, name:'BLUE' }, { team:0x4caf6a, shorts:0x23302a, name:'GREEN' },
   { team:0xe8c03d, shorts:0x3a3220, name:'GOLD' }, { team:0x9a5ad8, shorts:0x2a2236, name:'PURPLE' }, { team:0xf08a3c, shorts:0x3a2a20, name:'ORANGE' },
+  { team:0x2fb5a8, shorts:0x1f3433, name:'TEAL' }, { team:0xe65a9c, shorts:0x35202c, name:'PINK' }, { team:0xc9ccd4, shorts:0x2b2f3a, name:'SILVER' },
+  { team:0x9bd43a, shorts:0x2a3320, name:'LIME' },
 ];
 // Slot i is on team i % 2 in 1v1 and 2v2; in free-for-all every slot is its own team.
 // ctl per slot: local (this keyboard), cpu, dummy, seat (an online friend, or a stand-in while the seat is empty), net (guest view).
@@ -560,7 +565,7 @@ function fighterMeshes(idx, look) {
   add(torso, ball(0.12 * B.limb * bulk), shirt, 0.3, 0.3, 0);
   add(torso, ball(0.12 * B.limb * bulk), shirt, -0.3, 0.3, 0);
   // Chest number tells teammates apart: one bar for the first fighter on a team, two for the second.
-  for (const x of roster.ffa || idx < 2 ? [0] : [-0.045, 0.045]) add(torso, new THREE.BoxGeometry(0.05, 0.2, 0.02), M(0xf3efe6, 0.8), x, 0.15, 0.19 * Math.max(1, B.w * 0.98), false);
+  for (const x of roster.ffa ? [0] : [[0], [-0.045, 0.045], [-0.08, 0, 0.08]][Math.min(2, Math.floor(idx / 2))]) add(torso, new THREE.BoxGeometry(0.05, 0.2, 0.02), M(0xf3efe6, 0.8), x, 0.15, 0.19 * Math.max(1, B.w * 0.98), false);
   seg(torso, 0.07 * (race === 'alien' ? 0.7 : B.limb), 0.08 * B.limb, 0.5, 0.38, skin);
 
   // Head: aliens get a tall cranium, beasts a broader skull.
@@ -660,7 +665,7 @@ function fighterMeshes(idx, look) {
   parts.forEach(p => scene.add(p));
   return parts;
 }
-const meshes = new Array(PER * 6);
+const meshes = new Array(PER * 10);
 function disposeTree(o) { o.traverse(c => { if (c.geometry) c.geometry.dispose(); if (c.material) c.material.dispose(); }); }
 // Rebuilds one fighter's meshes and applies its race stats; physics bodies are untouched.
 function dress(i, look) {
@@ -675,7 +680,7 @@ function slimShadows(i) {
   for (let k = 0; k < PER; k++) meshes[i * PER + k].traverse(c => {
     if (!c.isMesh) return;
     if (!c.geometry.boundingSphere) c.geometry.computeBoundingSphere();
-    if (c.geometry.boundingSphere.radius * Math.max(c.scale.x, c.scale.y, c.scale.z) < 0.13) c.castShadow = false;
+    if (c.geometry.boundingSphere.radius * Math.max(c.scale.x, c.scale.y, c.scale.z) < (roster.n >= 8 ? 0.2 : 0.13)) c.castShadow = false;
   });
 }
 const allBodies = F.flatMap(f => f.all);
@@ -721,7 +726,7 @@ addEventListener('keydown', e => {
 });
 addEventListener('keyup', e => { keys[e.code] = false; });
 addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
-const localYaw = [0, Math.PI, 0, Math.PI, 0, Math.PI];
+const localYaw = F.map((f, i) => i % 2 ? Math.PI : 0);
 let camPitch = 0.38;
 function keyInput(idx) {
   return { fw:keys.KeyW, bk:keys.KeyS, la:keys.KeyQ, ra:keys.KeyE, ll:keys.KeyA, rl:keys.KeyD, gr:keys.KeyX, pd:keys.KeyZ, yaw:idx >= 0 ? localYaw[idx] : 0 };
@@ -741,10 +746,11 @@ const seats = {};
 const lineup = () => F.slice(0, roster.n);
 function spawnOf(i) {
   if (roster.ffa) {
-    const a = i / roster.n * Math.PI * 2, x = Math.sin(a) * 3.4, z = Math.cos(a) * 3.4;
+    const r = roster.n > 6 ? 4.8 : 3.4, a = i / roster.n * Math.PI * 2, x = Math.sin(a) * r, z = Math.cos(a) * r;
     return { x, z, yaw: Math.atan2(-x, -z) };
   }
-  const blue = i % 2 === 1, x = roster.n === 4 ? (i < 2 ? -1.3 : 1.3) * (blue ? -1 : 1) : 0;
+  // Teams line up side by side, 2.4 m apart, facing each other.
+  const blue = i % 2 === 1, per = roster.n / 2, x = (Math.floor(i / 2) - (per - 1) / 2) * 2.4 * (blue ? -1 : 1);
   return { x, z: blue ? 2.5 : -2.5, yaw: blue ? Math.PI : 0 };
 }
 function setRoster(ctl, ffa = false) {
@@ -775,7 +781,7 @@ function nearestEnemy(i) {
 const heldBy = f => lineup().find(a => a.grab && a.grab.body.fighter === f);
 
 // ---------- CPU ----------
-const ai = [0, Math.PI, 0, Math.PI, 0, Math.PI].map(yaw => ({ yaw, t:1, hold:0, key:null, grabT:0, grabLen:0, letGo:0, takedown:false, mashT:0, mashOn:false, mashKey:'la' }));
+const ai = F.map((f, i) => i % 2 ? Math.PI : 0).map(yaw => ({ yaw, t:1, hold:0, key:null, grabT:0, grabLen:0, letGo:0, takedown:false, mashT:0, mashOn:false, mashKey:'la' }));
 function aiInput(i, dt) {
   const s = ai[i], tgt = nearestEnemy(i);
   const inp = { yaw: s.yaw };
@@ -836,7 +842,7 @@ function newScore() { return new Array(roster.ffa ? roster.n : 2).fill(0); }
 function endRound(winner, why) {
   match.status = 'end'; match.timer = 3; match.round++;
   if (winner >= 0) match.score[winner]++;
-  match.msg = winner < 0 ? 'DRAW' : roster.ffa ? FFA[winner].name + ' WINS' : roster.n === 4 ? (winner === 0 ? 'RED' : 'BLUE') + ' WINS' : why;
+  match.msg = winner < 0 ? 'DRAW' : roster.ffa ? FFA[winner].name + ' WINS' : roster.n > 2 ? (winner === 0 ? 'RED' : 'BLUE') + ' WINS' : why;
 }
 const teamsLeft = () => new Set(lineup().filter(alive).map(f => f.team));
 // In 2v2 a fighter who is knocked out or rung out sits out the rest of the round; the round ends when a whole team is down.
@@ -887,7 +893,7 @@ function resolveHits() {
 
 // ---------- grappling ----------
 const GRAB_REACH = 0.16, STRUGGLE_KEYS = ['la','ra','ll','rl'];
-let prevInputs = [{}, {}, {}, {}, {}, {}];
+let prevInputs = F.map(() => ({}));
 function tryGrab(A, D) {
   if (A.grab || A.grabCool > 0 || !alive(A) || A.downed > 0 || !alive(D)) return;
   for (const L of A.limbs) {
@@ -1001,7 +1007,7 @@ async function openRoom(c) {
 }
 const r3 = v => Math.round(v * 1000) / 1000;
 // Seats friends fill in join order; anything else in the lineup stays a CPU.
-const SEAT_ORDER = { '1v1':[1], team:[1, 2, 3], coop:[2], ffa:[1, 2, 3, 4, 5] };
+const SEAT_ORDER = { '1v1':[1], team:[1, 2, 3], team3:[1, 2, 3, 4, 5], coop:[2], ffa:[1, 2, 3, 4, 5], ffa10:[1, 2, 3, 4, 5, 6, 7, 8, 9] };
 function seatName(i) {
   if (i === 0) return 'P1';
   const order = SEAT_ORDER[format] || [];
@@ -1022,17 +1028,19 @@ function hostNames() {
 }
 let hostSends = 0;
 function sendHostState() {
-  // Whole centimetres and thousandths of a quaternion: about half the bytes of decimals, which is what lets six fighters fit in one 4 KB update.
+  // Whole centimetres and thousandths of a quaternion: about half the bytes of decimals. q and -q are the same rotation,
+  // so flipping to w >= 0 lets the guest rebuild w and only x, y, z travel. That is what fits ten fighters in one 4 KB update.
   const b = [];
   for (const f of lineup()) for (const body of f.all) {
-    const p = body.position, q = body.quaternion;
-    b.push(Math.round(p.x * 100), Math.round(p.y * 100), Math.round(p.z * 100), Math.round(q.x * 1000), Math.round(q.y * 1000), Math.round(q.z * 1000), Math.round(q.w * 1000));
+    const p = body.position, q = body.quaternion, sg = q.w < 0 ? -1 : 1;
+    b.push(Math.round(p.x * 100), Math.round(p.y * 100), Math.round(p.z * 100), Math.round(q.x * sg * 1000), Math.round(q.y * sg * 1000), Math.round(q.z * sg * 1000));
   }
   // Looks rarely change, so they ride along about once a second instead of in every update.
   const s = { n:roster.n, ff:roster.ffa ? 1 : 0, b, h:lineup().map(f => Math.round(f.hp)), ot:lineup().map(f => f.out ? 1 : 0),
     sc:match.score, st:match.status, m:match.msg, rd:match.round, hc:match.hits, hp:match.hit.map(r3), hb:!!match.hitBig, gm:gameMode,
     gp:holdInfo(), sl:lineup().map((f, i) => seats[i] && seats[i].peer || ''), nm:hostNames() };
-  if (hostSends++ % 15 === 0) s.lk = lineup().map(f => f.look);
+  // One fighter's look per update, in rotation: guests have everyone's within a third of a second.
+  const li = hostSends++ % roster.n; s.l1 = [li, F[li].look];
   net.presence({ code, role:'host', s }).catch(() => {});
 }
 function codeFor(p) { return p && p.presence && p.presence.code === code; }
@@ -1064,12 +1072,12 @@ function hostPoll() {
   }
 }
 const renderPose = allBodies.map(() => ({ p:new THREE.Vector3(), q:new THREE.Quaternion(), tp:new THREE.Vector3(), tq:new THREE.Quaternion(), has:false }));
-const guestView = { h:new Array(6).fill(100), gp:new Array(6).fill(0), ot:new Array(6).fill(0), nm:[], lookKey:'' };
+const guestView = { h:new Array(10).fill(100), gp:new Array(10).fill(0), ot:new Array(10).fill(0), nm:[], lookKeys:[] };
 function guestPoll(dt) {
   const h = net.peers().find(p => !p.sameTab && codeFor(p) && p.presence.role === 'host');
   const s = h && h.presence.s;
-  const n = s && ([2, 4, 6].includes(s.n) ? s.n : 0);
-  if (s && n && s !== remote.lastS && Array.isArray(s.b) && s.b.length === n * PER * 7) {
+  const n = s && ([2, 4, 6, 10].includes(s.n) ? s.n : 0);
+  if (s && n && s !== remote.lastS && Array.isArray(s.b) && s.b.length === n * PER * 6) {
     if (!remote.lastS) $('sub').textContent = '';
     remote.lastS = s;
     if (n !== roster.n || !!s.ff !== roster.ffa) { setRoster(new Array(n).fill('net'), !!s.ff); renderPose.forEach(rp => { rp.has = false; }); match.score = newScore(); }
@@ -1078,19 +1086,19 @@ function guestPoll(dt) {
     if (li !== localIdx || !remote.placed) {
       localIdx = li; remote.placed = true;
       if (li >= 0) localYaw[li] = spawnOf(li).yaw;
-      flashSub(li >= 0 ? 'You’re ' + (roster.ffa ? FFA[li].name.toLowerCase() : ['on red', 'on blue'][li % 2] + (n === 4 ? ' as fighter ' + (li < 2 ? 1 : 2) : '')) : 'The match is full, so you’re watching. You’ll get a seat if one opens.');
+      flashSub(li >= 0 ? 'You’re ' + (roster.ffa ? FFA[li].name.toLowerCase() : ['on red', 'on blue'][li % 2] + (n > 2 ? ' as fighter ' + (Math.floor(li / 2) + 1) : '')) : 'The match is full, so you’re watching. You’ll get a seat if one opens.');
     }
     for (let i = 0; i < n * PER; i++) {
-      const rp = renderPose[i], o = i * 7;
-      rp.tp.set(s.b[o] / 100, s.b[o+1] / 100, s.b[o+2] / 100); rp.tq.set(s.b[o+3] / 1000, s.b[o+4] / 1000, s.b[o+5] / 1000, s.b[o+6] / 1000).normalize();
+      const rp = renderPose[i], o = i * 6, qx = s.b[o+3] / 1000, qy = s.b[o+4] / 1000, qz = s.b[o+5] / 1000;
+      rp.tp.set(s.b[o] / 100, s.b[o+1] / 100, s.b[o+2] / 100); rp.tq.set(qx, qy, qz, Math.sqrt(Math.max(0, 1 - qx*qx - qy*qy - qz*qz))).normalize();
       if (!rp.has) { rp.p.copy(rp.tp); rp.q.copy(rp.tq); rp.has = true; }
     }
     const nums = (a, d) => Array.isArray(a) ? a.slice(0, n).map(v => Number(v) || 0) : new Array(n).fill(d);
     guestView.h = nums(s.h, 100); guestView.ot = nums(s.ot, 0);
     guestView.nm = Array.isArray(s.nm) ? s.nm.slice(0, n).map(v => String(v).slice(0, 10)) : [];
-    if (Array.isArray(s.lk) && s.lk.length === n) {
-      const lk = JSON.stringify(s.lk.map(cleanLook));
-      if (lk !== guestView.lookKey) { guestView.lookKey = lk; JSON.parse(lk).forEach((l, i) => dress(i, l)); }
+    if (Array.isArray(s.l1) && Number.isInteger(s.l1[0]) && s.l1[0] >= 0 && s.l1[0] < n) {
+      const i = s.l1[0], lk = JSON.stringify(cleanLook(s.l1[1]));
+      if (lk !== guestView.lookKeys[i]) { guestView.lookKeys[i] = lk; dress(i, JSON.parse(lk)); }
     }
     guestView.gp = Array.isArray(s.gp) ? s.gp.slice(0, n).map(v => Array.isArray(v) ? [Number(v[0]) || 0, Number(v[1]) || 0, Number(v[2])] : 0) : new Array(n).fill(0);
     if (Array.isArray(s.sc)) match.score = s.sc.map(Number);
@@ -1124,6 +1132,7 @@ function buildHud() {
   $('sideB').innerHTML = idx.filter(i => i % 2 === 1).map(row).join('');
   $('hud').classList.toggle('four', roster.n >= 4);
   $('hud').classList.toggle('six', roster.n >= 6);
+  $('hud').classList.toggle('many', roster.n >= 8);
   if (roster.ffa) for (let i = 0; i < roster.n; i++) { const c = hex(FFA[i].team); $('hp' + i).style.background = c; $('tag' + i).style.color = c; }
   hudCache.clear();
 }
@@ -1162,17 +1171,18 @@ async function leaveNet() {
 }
 async function start(m, c) {
   await leaveNet();
-  const solo = { cpu:['local','cpu'], dummy:['local','dummy'], duo:['local','cpu','cpu','cpu'], ffa:['local','cpu','cpu','cpu','cpu','cpu'] };
-  const hosted = { '1v1':['local','seat'], team:['local','seat','seat','seat'], coop:['local','cpu','seat','cpu'], ffa:['local','seat','seat','seat','seat','seat'] };
+  const cpus = n => ['local', ...new Array(n - 1).fill('cpu')], seatsFor = n => ['local', ...new Array(n - 1).fill('seat')];
+  const solo = { cpu:cpus(2), dummy:['local','dummy'], duo:cpus(4), trio:cpus(6), ffa:cpus(6), ffa10:cpus(10) };
+  const hosted = { '1v1':seatsFor(2), team:seatsFor(4), team3:seatsFor(6), coop:['local','cpu','seat','cpu'], ffa:seatsFor(6), ffa10:seatsFor(10) };
   mode = solo[m] ? 'solo' : m;
   if (mode === 'host') format = hostFormat;
   localIdx = mode === 'guest' ? -1 : 0;
-  setRoster(solo[m] || (mode === 'host' ? hosted[format] : ['net', 'net']), m === 'ffa' || mode === 'host' && format === 'ffa');
+  setRoster(solo[m] || (mode === 'host' ? hosted[format] : ['net', 'net']), m.startsWith('ffa') || mode === 'host' && format.startsWith('ffa'));
   if (mode === 'host') for (const i of SEAT_ORDER[format]) seats[i] = { peer:null, input:decodeInput(null), lookKey:'' };
   $('menu').hidden = true; $('menuBtn').hidden = false; $('legend').hidden = false;
   $('sub').textContent = '';
   F.forEach((f, i) => dress(i, i === 0 && mode !== 'guest' ? myLook : randomLook()));
-  remote.lookKey = ''; guestView.lookKey = ''; guestView.nm = [];
+  remote.lookKey = ''; guestView.lookKeys = []; guestView.nm = [];
   newMatch();
   if (mode === 'host' || mode === 'guest') {
     code = c;
@@ -1199,7 +1209,7 @@ $('gmClassic').onclick = () => setGameMode('classic', true);
 $('gmKo').onclick = () => setGameMode('ko', true);
 try { if (localStorage.getItem('bonk-mode') === 'ko') setGameMode('ko', false); } catch (e) {}
 let hostFormat = '1v1';
-const FORMATS = { '1v1':'fm1v1', team:'fmTeam', coop:'fmCoop', ffa:'fmFfa' };
+const FORMATS = { '1v1':'fm1v1', team:'fmTeam', team3:'fmTeam3', coop:'fmCoop', ffa:'fmFfa', ffa10:'fmFfa10' };
 function setHostFormat(f) {
   hostFormat = f;
   for (const [k, id] of Object.entries(FORMATS)) $(id).setAttribute('aria-pressed', String(k === f));
@@ -1211,6 +1221,8 @@ const CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 $('bCpu').onclick = () => start('cpu');
 $('bDuo').onclick = () => start('duo');
 $('bFfa').onclick = () => start('ffa');
+$('bTrio').onclick = () => start('trio');
+$('bFfa10').onclick = () => start('ffa10');
 $('bDummy').onclick = () => start('dummy');
 $('bHost').onclick = () => start('host', Array.from({ length:4 }, () => CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)]).join(''));
 $('bJoin').onclick = () => {
@@ -1338,7 +1350,7 @@ function frame(now) {
     camPos.lerp(new THREE.Vector3(Math.sin(attractAng) * 10, 5.5, Math.cos(attractAng) * 10), 0.05);
     camLook.lerp(new THREE.Vector3(0, 1, 0), 0.05);
   } else {
-    const ci = camIdx(), me = renderPose[ci * PER].p, y = ci === localIdx ? localYaw[ci] : (ci % 2 ? Math.PI : 0), dist = roster.n >= 4 ? 6 : 5;
+    const ci = camIdx(), me = renderPose[ci * PER].p, y = ci === localIdx ? localYaw[ci] : (ci % 2 ? Math.PI : 0), dist = roster.n >= 8 ? 7.5 : roster.n >= 4 ? 6 : 5;
     const fx = Math.sin(y), fz = Math.cos(y), cp = Math.cos(camPitch), sp = Math.sin(camPitch);
     const tgt = new THREE.Vector3(me.x - fx * dist * cp, Math.max(me.y, 0.8) + 0.4 + dist * sp, me.z - fz * dist * cp);
     const k = 1 - Math.exp(-dt * 8);
