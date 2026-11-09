@@ -31,6 +31,8 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--bg);color:var(--
 #hud.four .hp{height:10px}
 #hud.four .tag{font-size:11px}
 #hud.four ~ #menuBtn{top:calc(108px + env(safe-area-inset-top,0px))}
+#hud.six ~ #menuBtn{top:calc(150px + env(safe-area-inset-top,0px))}
+#hud.six .side{gap:8px}
 .tag{font-family:var(--display);font-size:13px;letter-spacing:.06em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
 .side.a .tag{color:var(--red)} .side.b .tag{color:var(--blue)}
 .hp{width:min(340px,100%);height:14px;background:rgba(0,0,0,.45);border:2px solid var(--line);border-radius:3px;overflow:hidden}
@@ -147,7 +149,7 @@ input{font:600 16px var(--mono);letter-spacing:.2em;text-transform:uppercase;wid
     </div>
     <div class="grp">
       <h2>Solo</h2>
-      <div class="row"><button class="go" id="bCpu">Fight the CPU</button><button id="bDuo">2v2 with a CPU partner</button><button id="bDummy">Training dummy</button></div>
+      <div class="row"><button class="go" id="bCpu">Fight the CPU</button><button id="bDuo">2v2 with a CPU partner</button><button id="bFfa">Free-for-all vs 5 CPUs</button><button id="bDummy">Training dummy</button></div>
     </div>
     <div class="grp">
       <h2>Online 1v1</h2>
@@ -155,6 +157,7 @@ input{font:600 16px var(--mono);letter-spacing:.2em;text-transform:uppercase;wid
         <button id="fm1v1" aria-pressed="true"><b>1v1</b><span>You against one friend</span></button>
         <button id="fmTeam" aria-pressed="false"><b>Team battle</b><span>2v2, up to 4 friends; CPUs fill empty seats</span></button>
         <button id="fmCoop" aria-pressed="false"><b>Co-op vs CPU</b><span>You and a friend against two CPUs</span></button>
+        <button id="fmFfa" aria-pressed="false"><b>Free-for-all</b><span>Up to 6 players; last one standing wins</span></button>
       </div>
       <div class="row"><button id="bHost">Host a match</button></div>
       <div class="row" style="align-items:center"><label for="codeIn" class="note">Code</label><input id="codeIn" maxlength="4" autocomplete="off" spellcheck="false" placeholder="ABCD"><button id="bJoin">Join</button></div>
@@ -272,7 +275,7 @@ class Fighter {
   constructor(idx) {
     this.idx = idx; this.team = idx % 2;
     // One collision bit per fighter: everyone collides with the mat and with every other fighter, teammates included, but not themselves.
-    const group = 2 << idx, mask = 1 | (30 & ~group);
+    const group = 2 << idx, mask = 1 | (126 & ~group);
     this.joints = []; this.active = false; this.out = false;
     const T = this.torso = new CANNON.Body({ mass: 10, angularDamping: 0.5, linearDamping: 0.05 });
     T.addShape(new CANNON.Box(new CANNON.Vec3(0.3,0.4,0.17)));
@@ -431,7 +434,7 @@ class Fighter {
     b.torque.x += 12 * c.x; b.torque.y += 12 * c.y; b.torque.z += 12 * c.z;
   }
 }
-const F = [0, 1, 2, 3].map(i => new Fighter(i));
+const F = [0, 1, 2, 3, 4, 5].map(i => new Fighter(i));
 const alive = f => f.active && !f.out && !f.ko;
 
 // ---------- rendering ----------
@@ -508,6 +511,15 @@ const BEARDS = { none:'None', stubble:'Stubble', mustache:'Mustache', goatee:'Go
 const BODIES = { slim:'Slim', average:'Average', heavy:'Heavy' };
 const HAIR_COLORS = [0x17120f, 0x5a3520, 0xa8672f, 0xe0c068, 0xd8d6d0, 0xd8483a, 0x3a7bd5];
 const TEAMS = [{ team:0xe2553d, shorts:0x2b2f3a }, { team:0x3d8be2, shorts:0xf3efe6 }];
+const FFA = [
+  { team:0xe2553d, shorts:0x2b2f3a, name:'RED' }, { team:0x3d8be2, shorts:0xf3efe6, name:'BLUE' }, { team:0x4caf6a, shorts:0x23302a, name:'GREEN' },
+  { team:0xe8c03d, shorts:0x3a3220, name:'GOLD' }, { team:0x9a5ad8, shorts:0x2a2236, name:'PURPLE' }, { team:0xf08a3c, shorts:0x3a2a20, name:'ORANGE' },
+];
+// Slot i is on team i % 2 in 1v1 and 2v2; in free-for-all every slot is its own team.
+// ctl per slot: local (this keyboard), cpu, dummy, seat (an online friend, or a stand-in while the seat is empty), net (guest view).
+const roster = { n:2, ctl:['cpu','cpu'], ffa:false };
+const colorOf = idx => roster.ffa ? FFA[idx] : TEAMS[idx % 2];
+const hex = c => '#' + c.toString(16).padStart(6, '0');
 const pickKey = (obj, v, d) => Object.prototype.hasOwnProperty.call(obj, v) ? v : d;
 const pickIdx = (v, n) => Number.isInteger(v) && v >= 0 && v < n ? v : 0;
 // Looks arrive from other players online, so every field is checked against the known options.
@@ -525,7 +537,7 @@ function randomLook() {
 // Visual-only: physics stays the simple box-and-stick rig, so these meshes must keep the same pivots and lengths.
 function fighterMeshes(idx, look) {
   const M = (color, rough = 0.6, extra) => new THREE.MeshStandardMaterial({ color, roughness: rough, ...extra });
-  const race = look.race, team = TEAMS[idx % 2];
+  const race = look.race, team = colorOf(idx);
   const skin = M(RACES[race].skins[look.skin], race === 'beast' ? 0.95 : 0.55), shirt = M(team.team, 0.7), shorts = M(team.shorts, 0.8);
   const hairCol = HAIR_COLORS[look.hc], hair = M(hairCol, 0.9);
   const glove = M(team.team, 0.35), shoe = M(0x22252e, 0.5), sock = M(0xf1ede4, 0.9), white = M(0xffffff, 0.3), ink = M(0x16181d, 0.3);
@@ -548,7 +560,7 @@ function fighterMeshes(idx, look) {
   add(torso, ball(0.12 * B.limb * bulk), shirt, 0.3, 0.3, 0);
   add(torso, ball(0.12 * B.limb * bulk), shirt, -0.3, 0.3, 0);
   // Chest number tells teammates apart: one bar for the first fighter on a team, two for the second.
-  for (const x of idx < 2 ? [0] : [-0.045, 0.045]) add(torso, new THREE.BoxGeometry(0.05, 0.2, 0.02), M(0xf3efe6, 0.8), x, 0.15, 0.19 * Math.max(1, B.w * 0.98), false);
+  for (const x of roster.ffa || idx < 2 ? [0] : [-0.045, 0.045]) add(torso, new THREE.BoxGeometry(0.05, 0.2, 0.02), M(0xf3efe6, 0.8), x, 0.15, 0.19 * Math.max(1, B.w * 0.98), false);
   seg(torso, 0.07 * (race === 'alien' ? 0.7 : B.limb), 0.08 * B.limb, 0.5, 0.38, skin);
 
   // Head: aliens get a tall cranium, beasts a broader skull.
@@ -648,7 +660,7 @@ function fighterMeshes(idx, look) {
   parts.forEach(p => scene.add(p));
   return parts;
 }
-const meshes = new Array(PER * 4);
+const meshes = new Array(PER * 6);
 function disposeTree(o) { o.traverse(c => { if (c.geometry) c.geometry.dispose(); if (c.material) c.material.dispose(); }); }
 // Rebuilds one fighter's meshes and applies its race stats; physics bodies are untouched.
 function dress(i, look) {
@@ -656,6 +668,15 @@ function dress(i, look) {
   F[i].look = look; F[i].power = RACES[look.race].power; F[i].speed = RACES[look.race].speed;
   for (let k = 0; k < PER; k++) { const m = meshes[i * PER + k]; if (m) { scene.remove(m); disposeTree(m); } }
   fighterMeshes(i, look).forEach((m, k) => { meshes[i * PER + k] = m; });
+  if (roster.n >= 6) slimShadows(i);
+}
+// In six-fighter brawls only the big shapes cast shadows; the small details roughly double the shadow pass's draw calls for little visible gain.
+function slimShadows(i) {
+  for (let k = 0; k < PER; k++) meshes[i * PER + k].traverse(c => {
+    if (!c.isMesh) return;
+    if (!c.geometry.boundingSphere) c.geometry.computeBoundingSphere();
+    if (c.geometry.boundingSphere.radius * Math.max(c.scale.x, c.scale.y, c.scale.z) < 0.13) c.castShadow = false;
+  });
 }
 const allBodies = F.flatMap(f => f.all);
 let myLook = (() => {
@@ -700,7 +721,7 @@ addEventListener('keydown', e => {
 });
 addEventListener('keyup', e => { keys[e.code] = false; });
 addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
-const localYaw = [0, Math.PI, 0, Math.PI];
+const localYaw = [0, Math.PI, 0, Math.PI, 0, Math.PI];
 let camPitch = 0.38;
 function keyInput(idx) {
   return { fw:keys.KeyW, bk:keys.KeyS, la:keys.KeyQ, ra:keys.KeyE, ll:keys.KeyA, rl:keys.KeyD, gr:keys.KeyX, pd:keys.KeyZ, yaw:idx >= 0 ? localYaw[idx] : 0 };
@@ -715,19 +736,30 @@ function decodeInput(o) {
 }
 
 // ---------- lineup ----------
-// Slot i is on team i % 2 (0 red, 1 blue); 1v1 uses slots 0-1, 2v2 uses 0-3.
-// ctl per slot: local (this keyboard), cpu, dummy, seat (an online friend, or a stand-in while the seat is empty), net (guest view).
-const roster = { n:2, ctl:['cpu','cpu'] };
 let format = '1v1';
 const seats = {};
 const lineup = () => F.slice(0, roster.n);
 function spawnOf(i) {
+  if (roster.ffa) {
+    const a = i / roster.n * Math.PI * 2, x = Math.sin(a) * 3.4, z = Math.cos(a) * 3.4;
+    return { x, z, yaw: Math.atan2(-x, -z) };
+  }
   const blue = i % 2 === 1, x = roster.n === 4 ? (i < 2 ? -1.3 : 1.3) * (blue ? -1 : 1) : 0;
   return { x, z: blue ? 2.5 : -2.5, yaw: blue ? Math.PI : 0 };
 }
-function setRoster(ctl) {
-  roster.ctl = ctl; roster.n = ctl.length;
+function setRoster(ctl, ffa = false) {
+  const recolor = roster.ffa !== ffa;
+  roster.ctl = ctl; roster.n = ctl.length; roster.ffa = ffa;
+  // Bigger brawls trade a few solver passes for frame rate, and sort-and-sweep beats checking every pair once there are 30+ bodies.
+  world.solver.iterations = roster.n <= 2 ? 20 : roster.n <= 4 ? 16 : 12;
+  world.broadphase = roster.n <= 2 ? new CANNON.NaiveBroadphase() : new CANNON.SAPBroadphase(world);
+  // Six fighters: refresh shadows every other frame and keep pixel density at 1 to protect the frame rate.
+  renderer.shadowMap.autoUpdate = roster.n < 6;
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, roster.n >= 6 ? 1 : 1.25));
   F.forEach((f, i) => {
+    f.team = ffa ? i : i % 2;
+    if (roster.n >= 6 && i < roster.n) slimShadows(i);
+    if (recolor && i < roster.n && f.look) dress(i, f.look);
     if (i >= roster.n) { for (const g of F) if (g.grab && (g === f || g.grab.body.fighter === f)) releaseGrab(g, 0); f.deactivate(); }
     for (let k = 0; k < PER; k++) meshes[i * PER + k].visible = i < roster.n;
   });
@@ -743,7 +775,7 @@ function nearestEnemy(i) {
 const heldBy = f => lineup().find(a => a.grab && a.grab.body.fighter === f);
 
 // ---------- CPU ----------
-const ai = [0, Math.PI, 0, Math.PI].map(yaw => ({ yaw, t:1, hold:0, key:null, grabT:0, grabLen:0, letGo:0, takedown:false, mashT:0, mashOn:false, mashKey:'la' }));
+const ai = [0, Math.PI, 0, Math.PI, 0, Math.PI].map(yaw => ({ yaw, t:1, hold:0, key:null, grabT:0, grabLen:0, letGo:0, takedown:false, mashT:0, mashOn:false, mashKey:'la' }));
 function aiInput(i, dt) {
   const s = ai[i], tgt = nearestEnemy(i);
   const inp = { yaw: s.yaw };
@@ -799,15 +831,18 @@ function resetRound() {
   });
   match.status = 'ready'; match.timer = 1.2; match.msg = 'ROUND ' + match.round;
 }
-function newMatch() { match.score = [0,0]; match.round = 1; resetRound(); }
+function newMatch() { match.score = newScore(); match.round = 1; resetRound(); }
+function newScore() { return new Array(roster.ffa ? roster.n : 2).fill(0); }
 function endRound(winner, why) {
-  match.status = 'end'; match.timer = 3; match.score[winner]++; match.round++;
-  match.msg = roster.n === 4 ? (winner === 0 ? 'RED' : 'BLUE') + ' WINS' : why;
+  match.status = 'end'; match.timer = 3; match.round++;
+  if (winner >= 0) match.score[winner]++;
+  match.msg = winner < 0 ? 'DRAW' : roster.ffa ? FFA[winner].name + ' WINS' : roster.n === 4 ? (winner === 0 ? 'RED' : 'BLUE') + ' WINS' : why;
 }
+const teamsLeft = () => new Set(lineup().filter(alive).map(f => f.team));
 // In 2v2 a fighter who is knocked out or rung out sits out the rest of the round; the round ends when a whole team is down.
 function eliminated(f, why) {
   match.reason = why;
-  if (roster.n === 4 && lineup().some(g => g.team === f.team && alive(g))) { match.msg = why; match.timer = 0.9; }
+  if (roster.n > 2 && teamsLeft().size >= 2) { match.msg = why; match.timer = 0.9; }
 }
 function ringOut(f) {
   for (const g of F) if (g.grab && (g === f || g.grab.body.fighter === f)) releaseGrab(g, 0.3);
@@ -821,7 +856,8 @@ function tickMatch(dt) {
   } else if (match.status === 'fight') {
     if (match.timer > 0) { match.timer -= dt; if (match.timer <= 0) match.msg = ''; }
     for (const f of lineup()) if (f.active && !f.out && f.torso.position.y < -3) ringOut(f);
-    for (const t of [0, 1]) if (!lineup().some(f => f.team === t && alive(f))) return endRound(1 - t, match.reason);
+    const left = teamsLeft();
+    if (left.size <= 1) return endRound(left.size ? [...left][0] : -1, match.reason);
   } else if (match.status === 'end') {
     match.timer -= dt;
     if (match.timer <= 0) resetRound();
@@ -851,7 +887,7 @@ function resolveHits() {
 
 // ---------- grappling ----------
 const GRAB_REACH = 0.16, STRUGGLE_KEYS = ['la','ra','ll','rl'];
-let prevInputs = [{}, {}, {}, {}];
+let prevInputs = [{}, {}, {}, {}, {}, {}];
 function tryGrab(A, D) {
   if (A.grab || A.grabCool > 0 || !alive(A) || A.downed > 0 || !alive(D)) return;
   for (const L of A.limbs) {
@@ -938,7 +974,7 @@ function inputFor(i) {
 }
 let stepCount = 0;
 function simStep() {
-  const inputs = [0, 1, 2, 3].map(i => i < roster.n ? inputFor(i) : {});
+  const inputs = F.map((f, i) => i < roster.n ? inputFor(i) : {});
   for (let i = 0; i < roster.n; i++) if (seats[i] && seats[i].peer) localYaw[i] = inputs[i].yaw;
   for (let i = 0; i < roster.n; i++) if (alive(F[i]) || F[i].ko && F[i].active) F[i].step(inputs[i], STEP);
   grapple(inputs, STEP);
@@ -965,7 +1001,7 @@ async function openRoom(c) {
 }
 const r3 = v => Math.round(v * 1000) / 1000;
 // Seats friends fill in join order; anything else in the lineup stays a CPU.
-const SEAT_ORDER = { '1v1':[1], team:[1, 2, 3], coop:[2] };
+const SEAT_ORDER = { '1v1':[1], team:[1, 2, 3], coop:[2], ffa:[1, 2, 3, 4, 5] };
 function seatName(i) {
   if (i === 0) return 'P1';
   const order = SEAT_ORDER[format] || [];
@@ -979,20 +1015,25 @@ function nameOf(i) {
   if (ctl === 'dummy') return 'DUMMY';
   if (ctl === 'seat' && seats[i] && seats[i].peer) return seatName(i);
   if (ctl === 'seat' && format === '1v1') return 'WAITING';
-  return F[i].team === F[localIdx].team ? 'ALLY CPU' : 'CPU';
+  return !roster.ffa && F[i].team === F[localIdx].team ? 'ALLY CPU' : 'CPU';
 }
 function hostNames() {
   return lineup().map((f, i) => i === 0 ? 'P1' : roster.ctl[i] === 'seat' && seats[i] && seats[i].peer ? seatName(i) : roster.ctl[i] === 'seat' && format === '1v1' ? 'WAITING' : 'CPU');
 }
+let hostSends = 0;
 function sendHostState() {
+  // Whole centimetres and thousandths of a quaternion: about half the bytes of decimals, which is what lets six fighters fit in one 4 KB update.
   const b = [];
   for (const f of lineup()) for (const body of f.all) {
     const p = body.position, q = body.quaternion;
-    b.push(r3(p.x), r3(p.y), r3(p.z), r3(q.x), r3(q.y), r3(q.z), r3(q.w));
+    b.push(Math.round(p.x * 100), Math.round(p.y * 100), Math.round(p.z * 100), Math.round(q.x * 1000), Math.round(q.y * 1000), Math.round(q.z * 1000), Math.round(q.w * 1000));
   }
-  net.presence({ code, role:'host', s:{ n:roster.n, b, h:lineup().map(f => Math.round(f.hp)), ot:lineup().map(f => f.out ? 1 : 0),
+  // Looks rarely change, so they ride along about once a second instead of in every update.
+  const s = { n:roster.n, ff:roster.ffa ? 1 : 0, b, h:lineup().map(f => Math.round(f.hp)), ot:lineup().map(f => f.out ? 1 : 0),
     sc:match.score, st:match.status, m:match.msg, rd:match.round, hc:match.hits, hp:match.hit.map(r3), hb:!!match.hitBig, gm:gameMode,
-    gp:holdInfo(), lk:lineup().map(f => f.look), sl:lineup().map((f, i) => seats[i] && seats[i].peer || ''), nm:hostNames() } }).catch(() => {});
+    gp:holdInfo(), sl:lineup().map((f, i) => seats[i] && seats[i].peer || ''), nm:hostNames() };
+  if (hostSends++ % 15 === 0) s.lk = lineup().map(f => f.look);
+  net.presence({ code, role:'host', s }).catch(() => {});
 }
 function codeFor(p) { return p && p.presence && p.presence.code === code; }
 function hostPoll() {
@@ -1023,25 +1064,25 @@ function hostPoll() {
   }
 }
 const renderPose = allBodies.map(() => ({ p:new THREE.Vector3(), q:new THREE.Quaternion(), tp:new THREE.Vector3(), tq:new THREE.Quaternion(), has:false }));
-const guestView = { h:[100,100,100,100], gp:[0,0,0,0], ot:[0,0,0,0], nm:[], lookKey:'' };
+const guestView = { h:new Array(6).fill(100), gp:new Array(6).fill(0), ot:new Array(6).fill(0), nm:[], lookKey:'' };
 function guestPoll(dt) {
   const h = net.peers().find(p => !p.sameTab && codeFor(p) && p.presence.role === 'host');
   const s = h && h.presence.s;
-  const n = s && (s.n === 4 ? 4 : s.n === 2 ? 2 : 0);
+  const n = s && ([2, 4, 6].includes(s.n) ? s.n : 0);
   if (s && n && s !== remote.lastS && Array.isArray(s.b) && s.b.length === n * PER * 7) {
     if (!remote.lastS) $('sub').textContent = '';
     remote.lastS = s;
-    if (n !== roster.n) { setRoster(new Array(n).fill('net')); renderPose.forEach(rp => { rp.has = false; }); }
+    if (n !== roster.n || !!s.ff !== roster.ffa) { setRoster(new Array(n).fill('net'), !!s.ff); renderPose.forEach(rp => { rp.has = false; }); match.score = newScore(); }
     const me = (net.peers().find(p => p.sameTab) || {}).peer;
     const li = Array.isArray(s.sl) && me ? s.sl.indexOf(me) : -1;
     if (li !== localIdx || !remote.placed) {
       localIdx = li; remote.placed = true;
       if (li >= 0) localYaw[li] = spawnOf(li).yaw;
-      flashSub(li >= 0 ? 'You’re ' + ['on red', 'on blue'][li % 2] + (n === 4 ? ' as fighter ' + (li < 2 ? 1 : 2) : '') : 'The match is full, so you’re watching. You’ll get a seat if one opens.');
+      flashSub(li >= 0 ? 'You’re ' + (roster.ffa ? FFA[li].name.toLowerCase() : ['on red', 'on blue'][li % 2] + (n === 4 ? ' as fighter ' + (li < 2 ? 1 : 2) : '')) : 'The match is full, so you’re watching. You’ll get a seat if one opens.');
     }
     for (let i = 0; i < n * PER; i++) {
       const rp = renderPose[i], o = i * 7;
-      rp.tp.set(+s.b[o], +s.b[o+1], +s.b[o+2]); rp.tq.set(+s.b[o+3], +s.b[o+4], +s.b[o+5], +s.b[o+6]).normalize();
+      rp.tp.set(s.b[o] / 100, s.b[o+1] / 100, s.b[o+2] / 100); rp.tq.set(s.b[o+3] / 1000, s.b[o+4] / 1000, s.b[o+5] / 1000, s.b[o+6] / 1000).normalize();
       if (!rp.has) { rp.p.copy(rp.tp); rp.q.copy(rp.tq); rp.has = true; }
     }
     const nums = (a, d) => Array.isArray(a) ? a.slice(0, n).map(v => Number(v) || 0) : new Array(n).fill(d);
@@ -1081,7 +1122,9 @@ function buildHud() {
   const idx = [...Array(roster.n).keys()];
   $('sideA').innerHTML = idx.filter(i => i % 2 === 0).map(row).join('');
   $('sideB').innerHTML = idx.filter(i => i % 2 === 1).map(row).join('');
-  $('hud').classList.toggle('four', roster.n === 4);
+  $('hud').classList.toggle('four', roster.n >= 4);
+  $('hud').classList.toggle('six', roster.n >= 6);
+  if (roster.ffa) for (let i = 0; i < roster.n; i++) { const c = hex(FFA[i].team); $('hp' + i).style.background = c; $('tag' + i).style.color = c; }
   hudCache.clear();
 }
 const hudCache = new Map();
@@ -1093,21 +1136,21 @@ function setHud(id, prop, value) {
   if (prop === 'text') el.textContent = value; else if (prop === 'hidden') el.hidden = value; else el.style.width = value;
 }
 // Floating labels over heads, only in 2v2 where four similar fighters are hard to tell apart.
-const tags = [0, 1, 2, 3].map(i => {
+const tags = F.map((f, i) => {
   const c = document.createElement('canvas'); c.width = 256; c.height = 64;
   const tex = new THREE.CanvasTexture(c);
   const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true }));
   sp.scale.set(0.9, 0.225, 1); sp.renderOrder = 10; sp.visible = false; scene.add(sp);
   return { c, tex, sp, text: '' };
 });
-function drawTag(t, text, team) {
+function drawTag(t, text, i) {
   if (t.text === text) return;
   t.text = text;
   const g = t.c.getContext('2d');
   g.clearRect(0, 0, 256, 64);
   g.font = '700 34px "IBM Plex Mono", ui-monospace, monospace'; g.textAlign = 'center'; g.textBaseline = 'middle';
   g.lineWidth = 8; g.strokeStyle = 'rgba(10,12,18,.85)'; g.strokeText(text, 128, 34);
-  g.fillStyle = text === 'YOU' ? '#e8a33d' : team ? '#7fb3f0' : '#f08a77'; g.fillText(text, 128, 34);
+  g.fillStyle = text === 'YOU' ? '#e8a33d' : roster.ffa ? hex(FFA[i].team) : i % 2 ? '#7fb3f0' : '#f08a77'; g.fillText(text, 128, 34);
   t.tex.needsUpdate = true;
 }
 
@@ -1119,12 +1162,12 @@ async function leaveNet() {
 }
 async function start(m, c) {
   await leaveNet();
-  const solo = { cpu:['local','cpu'], dummy:['local','dummy'], duo:['local','cpu','cpu','cpu'] };
-  const hosted = { '1v1':['local','seat'], team:['local','seat','seat','seat'], coop:['local','cpu','seat','cpu'] };
+  const solo = { cpu:['local','cpu'], dummy:['local','dummy'], duo:['local','cpu','cpu','cpu'], ffa:['local','cpu','cpu','cpu','cpu','cpu'] };
+  const hosted = { '1v1':['local','seat'], team:['local','seat','seat','seat'], coop:['local','cpu','seat','cpu'], ffa:['local','seat','seat','seat','seat','seat'] };
   mode = solo[m] ? 'solo' : m;
   if (mode === 'host') format = hostFormat;
   localIdx = mode === 'guest' ? -1 : 0;
-  setRoster(solo[m] || (mode === 'host' ? hosted[format] : ['net', 'net']));
+  setRoster(solo[m] || (mode === 'host' ? hosted[format] : ['net', 'net']), m === 'ffa' || mode === 'host' && format === 'ffa');
   if (mode === 'host') for (const i of SEAT_ORDER[format]) seats[i] = { peer:null, input:decodeInput(null), lookKey:'' };
   $('menu').hidden = true; $('menuBtn').hidden = false; $('legend').hidden = false;
   $('sub').textContent = '';
@@ -1156,7 +1199,7 @@ $('gmClassic').onclick = () => setGameMode('classic', true);
 $('gmKo').onclick = () => setGameMode('ko', true);
 try { if (localStorage.getItem('bonk-mode') === 'ko') setGameMode('ko', false); } catch (e) {}
 let hostFormat = '1v1';
-const FORMATS = { '1v1':'fm1v1', team:'fmTeam', coop:'fmCoop' };
+const FORMATS = { '1v1':'fm1v1', team:'fmTeam', coop:'fmCoop', ffa:'fmFfa' };
 function setHostFormat(f) {
   hostFormat = f;
   for (const [k, id] of Object.entries(FORMATS)) $(id).setAttribute('aria-pressed', String(k === f));
@@ -1167,6 +1210,7 @@ try { const f = localStorage.getItem('bonk-format'); if (FORMATS[f]) setHostForm
 const CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 $('bCpu').onclick = () => start('cpu');
 $('bDuo').onclick = () => start('duo');
+$('bFfa').onclick = () => start('ffa');
 $('bDummy').onclick = () => start('dummy');
 $('bHost').onclick = () => start('host', Array.from({ length:4 }, () => CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)]).join(''));
 $('bJoin').onclick = () => {
@@ -1177,7 +1221,7 @@ $('bJoin').onclick = () => {
 $('codeIn').addEventListener('keydown', e => { if (e.key === 'Enter') $('bJoin').click(); });
 function toAttract() {
   mode = 'attract'; localIdx = 0; format = '1v1';
-  setRoster(['cpu', 'cpu']);
+  setRoster(['cpu', 'cpu'], false);
   dress(0, myLook); dress(1, randomLook()); newMatch();
 }
 $('menuBtn').onclick = async () => {
@@ -1189,7 +1233,6 @@ $('menuBtn').onclick = async () => {
 // ---------- customize ----------
 let dressing = false;
 const RACE_NOTES = { human:'Balanced all-rounder.', alien:'Same strength and speed as a Human.', beast:'Hits about 30% harder and grabs harder, but walks about 22% slower.' };
-const hex = c => '#' + c.toString(16).padStart(6, '0');
 function chipRow(el, options, key) {
   el.replaceChildren(...Object.entries(options).map(([v, label]) => {
     const b = document.createElement('button');
@@ -1238,14 +1281,14 @@ $('bDone').onclick = () => {
 
 // ---------- main loop ----------
 const camPos = new THREE.Vector3(0, 6, -9), camLook = new THREE.Vector3();
-let acc = 0, last = performance.now(), attractAng = 0, lastHint = null;
+let acc = 0, last = performance.now(), attractAng = 0, lastHint = null, frameNo = 0;
 toAttract();
 const shown = i => mode === 'guest' ? !guestView.ot[i] : !F[i].out;
 // Follow your own fighter; once they're out, follow a teammate who's still in.
 function camIdx() {
   if (localIdx >= 0 && shown(localIdx)) return localIdx;
-  const team = localIdx >= 0 ? localIdx % 2 : 0;
-  for (let i = 0; i < roster.n; i++) if (i % 2 === team && shown(i)) return i;
+  const team = localIdx >= 0 ? F[localIdx].team : 0;
+  for (let i = 0; i < roster.n; i++) if (F[i].team === team && shown(i)) return i;
   for (let i = 0; i < roster.n; i++) if (shown(i)) return i;
   return 0;
 }
@@ -1272,10 +1315,10 @@ function frame(now) {
       m.visible = vis; m.position.copy(rp.p); m.quaternion.copy(rp.q);
     }
     const t = tags[i];
-    t.sp.visible = vis && roster.n === 4 && mode !== 'attract' && !dressing;
-    if (t.sp.visible) { drawTag(t, nameOf(i), i % 2); t.sp.position.set(renderPose[i * PER].p.x, renderPose[i * PER].p.y + 1.2, renderPose[i * PER].p.z); }
+    t.sp.visible = vis && roster.n >= 4 && mode !== 'attract' && !dressing;
+    if (t.sp.visible) { drawTag(t, nameOf(i), i); t.sp.position.set(renderPose[i * PER].p.x, renderPose[i * PER].p.y + 1.2, renderPose[i * PER].p.z); }
   }
-  for (let i = roster.n; i < 4; i++) tags[i].sp.visible = false;
+  for (let i = roster.n; i < F.length; i++) tags[i].sp.visible = false;
 
   for (let i = sparks.length - 1; i >= 0; i--) {
     const s = sparks[i]; s.life += dt;
@@ -1295,7 +1338,7 @@ function frame(now) {
     camPos.lerp(new THREE.Vector3(Math.sin(attractAng) * 10, 5.5, Math.cos(attractAng) * 10), 0.05);
     camLook.lerp(new THREE.Vector3(0, 1, 0), 0.05);
   } else {
-    const ci = camIdx(), me = renderPose[ci * PER].p, y = ci === localIdx ? localYaw[ci] : (ci % 2 ? Math.PI : 0), dist = roster.n === 4 ? 6 : 5;
+    const ci = camIdx(), me = renderPose[ci * PER].p, y = ci === localIdx ? localYaw[ci] : (ci % 2 ? Math.PI : 0), dist = roster.n >= 4 ? 6 : 5;
     const fx = Math.sin(y), fz = Math.cos(y), cp = Math.cos(camPitch), sp = Math.sin(camPitch);
     const tgt = new THREE.Vector3(me.x - fx * dist * cp, Math.max(me.y, 0.8) + 0.4 + dist * sp, me.z - fz * dist * cp);
     const k = 1 - Math.exp(-dt * 8);
@@ -1307,13 +1350,13 @@ function frame(now) {
   const hp = mode === 'guest' ? guestView.h : lineup().map(f => f.hp);
   const gp = mode === 'guest' ? guestView.gp : holdInfo();
   for (let i = 0; i < roster.n; i++) {
-    setHud('tag' + i, 'text', nameOf(i) + (shown(i) ? '' : ' · OUT'));
+    setHud('tag' + i, 'text', nameOf(i) + (roster.ffa ? ' · ' + (match.score[i] || 0) : '') + (shown(i) ? '' : ' · OUT'));
     setHud('hp' + i, 'width', clamp(hp[i], 0, 100) + '%');
     const g = mode === 'attract' ? 0 : gp[i];
     setHud('hold' + i, 'hidden', !g);
     if (g) { setHud('grip' + i, 'width', clamp(g[0], 0, 100) + '%'); setHud('pull' + i, 'width', clamp(g[1], 0, 100) + '%'); }
   }
-  setHud('score', 'text', match.score[0] + ' – ' + match.score[1]);
+  setHud('score', 'text', roster.ffa ? 'ROUND ' + match.round : match.score[0] + ' – ' + match.score[1]);
   let hint = '';
   if (mode !== 'attract' && match.status === 'fight' && localIdx >= 0) {
     if (gp[localIdx]) hint = '<b>Grabbed!</b> Tap Q, E, A or D fast, or hold S, to break free';
@@ -1324,6 +1367,7 @@ function frame(now) {
   if (subTimer !== Infinity && subTimer > 0) { subTimer -= dt; if (subTimer <= 0) $('sub').textContent = ''; }
   if (mode === 'host' && subTimer === Infinity && Object.values(seats).some(s => s.peer)) subTimer = 0.01;
 
+  if (!renderer.shadowMap.autoUpdate) renderer.shadowMap.needsUpdate = (frameNo++ & 1) === 0;
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
 }
