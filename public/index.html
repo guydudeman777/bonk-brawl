@@ -124,6 +124,7 @@ input{font:600 16px var(--mono);letter-spacing:.2em;text-transform:uppercase;wid
     <h2 class="ctitle">Your fighter</h2>
     <div class="opt"><h3>Race</h3><div class="chips" id="optRace"></div><p class="note" id="raceNote"></p></div>
     <div class="opt"><h3>Body</h3><div class="chips" id="optBody"></div></div>
+    <div class="opt" hidden><h3>Face</h3><div class="chips" id="optFace"></div></div>
     <div class="opt"><h3 id="skinLabel">Skin</h3><div class="swatches" id="optSkin"></div></div>
     <div class="opt"><h3>Hair</h3><div class="chips" id="optHair"></div></div>
     <div class="opt"><h3>Hair color</h3><div class="swatches" id="optHc"></div></div>
@@ -511,7 +512,8 @@ const RACES = {
 };
 const HAIRS = { bald:'Bald', buzz:'Buzz', short:'Short', spiky:'Spiky', mohawk:'Mohawk', afro:'Afro', long:'Long' };
 const BEARDS = { none:'None', stubble:'Stubble', mustache:'Mustache', goatee:'Goatee', full:'Full beard' };
-const BODIES = { slim:'Slim', average:'Average', heavy:'Heavy' };
+const BODIES = { slim:'Slim', average:'Average', heavy:'Heavy', stick:'Stickman' };
+const FACES = { smile:'Smile', grin:'Grin', angry:'Angry', shock:'Shocked', cool:'Cool', sleepy:'Sleepy', dead:'X-eyes' };
 const HAIR_COLORS = [0x17120f, 0x5a3520, 0xa8672f, 0xe0c068, 0xd8d6d0, 0xd8483a, 0x3a7bd5];
 const TEAMS = [{ team:0xe2553d, shorts:0x2b2f3a }, { team:0x3d8be2, shorts:0xf3efe6 }];
 const FFA = [
@@ -531,16 +533,62 @@ const pickIdx = (v, n) => Number.isInteger(v) && v >= 0 && v < n ? v : 0;
 function cleanLook(o) {
   o = o && typeof o === 'object' ? o : {};
   return { race:pickKey(RACES, o.race, 'human'), body:pickKey(BODIES, o.body, 'average'), hair:pickKey(HAIRS, o.hair, 'short'),
-    beard:pickKey(BEARDS, o.beard, 'none'), skin:pickIdx(o.skin, 5), hc:pickIdx(o.hc, HAIR_COLORS.length) };
+    beard:pickKey(BEARDS, o.beard, 'none'), skin:pickIdx(o.skin, 5), hc:pickIdx(o.hc, HAIR_COLORS.length), face:pickKey(FACES, o.face, 'smile') };
 }
 const rnd = a => a[Math.floor(Math.random() * a.length)];
 function randomLook() {
-  return cleanLook({ race:rnd(['human','human','alien','beast']), body:rnd(Object.keys(BODIES)), hair:rnd(Object.keys(HAIRS)),
+  return cleanLook({ race:rnd(['human','human','alien','beast']), body:rnd(Object.keys(BODIES)), face:rnd(Object.keys(FACES)), hair:rnd(Object.keys(HAIRS)),
     beard:rnd(['none','none','stubble','mustache','goatee','full']), skin:Math.floor(Math.random() * 5), hc:Math.floor(Math.random() * HAIR_COLORS.length) });
 }
 
+// Stickman faces are drawn once per expression on a canvas and shared by every stickman wearing it.
+const faceTex = {};
+function faceTexture(face) {
+  if (faceTex[face]) return faceTex[face];
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const g = c.getContext('2d');
+  g.strokeStyle = g.fillStyle = '#16181d'; g.lineWidth = 7; g.lineCap = 'round';
+  const dot = (x, y, r) => { g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill(); };
+  const line = (x1, y1, x2, y2) => { g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.stroke(); };
+  const arc = (x, y, r, a, b) => { g.beginPath(); g.arc(x, y, r, a * Math.PI, b * Math.PI); g.stroke(); };
+  if (face === 'smile') { dot(44, 50, 7); dot(84, 50, 7); arc(64, 66, 26, 0.18, 0.82); }
+  if (face === 'grin') { dot(44, 48, 7); dot(84, 48, 7); g.beginPath(); g.moveTo(34, 72); g.arc(64, 72, 30, 0, Math.PI); g.closePath(); g.fill(); g.fillStyle = '#f4f1ea'; g.fillRect(40, 72, 48, 8); }
+  if (face === 'angry') { dot(46, 56, 7); dot(82, 56, 7); line(32, 36, 56, 46); line(96, 36, 72, 46); arc(64, 104, 22, 1.2, 1.8); }
+  if (face === 'shock') { g.lineWidth = 5; arc(44, 48, 11, 0, 2); arc(84, 48, 11, 0, 2); dot(44, 48, 4); dot(84, 48, 4); arc(64, 90, 12, 0, 2); }
+  if (face === 'cool') { g.fillRect(28, 40, 32, 18); g.fillRect(68, 40, 32, 18); g.lineWidth = 5; line(58, 46, 70, 46); line(50, 86, 80, 80); }
+  if (face === 'sleepy') { arc(44, 46, 10, 0.1, 0.9); arc(84, 46, 10, 0.1, 0.9); line(54, 86, 74, 86); g.font = '700 22px sans-serif'; g.fillText('z', 96, 30); }
+  if (face === 'dead') { line(36, 40, 52, 56); line(52, 40, 36, 56); line(76, 40, 92, 56); line(92, 40, 76, 56); g.lineWidth = 5; g.beginPath(); g.moveTo(42, 88); for (let x = 42; x <= 86; x += 11) g.lineTo(x, x % 22 ? 82 : 92); g.stroke(); }
+  return faceTex[face] = new THREE.CanvasTexture(c);
+}
+function stickMeshes(idx, look) {
+  const team = colorOf(idx);
+  const ink = new THREE.MeshStandardMaterial({ color:0x16181d, roughness:0.6 }), teamMat = new THREE.MeshStandardMaterial({ color:team.team, roughness:0.4 });
+  const add = (parent, geo, mat, x = 0, y = 0, z = 0) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.castShadow = true; parent.add(m); return m; };
+  const rod = (parent, r, yTop, yBot) => add(parent, new THREE.CylinderGeometry(r, r, yTop - yBot, 8), ink, 0, (yTop + yBot) / 2, 0);
+  const torso = new THREE.Group();
+  rod(torso, 0.035, 0.47, -0.42);
+  // Shoulder and hip bars reach the limb pivots, which sit off the spine.
+  add(torso, new THREE.CylinderGeometry(0.03, 0.03, 0.84, 8), ink, 0, 0.3, 0).rotation.z = Math.PI / 2;
+  add(torso, new THREE.CylinderGeometry(0.03, 0.03, 0.34, 8), ink, 0, -0.42, 0).rotation.z = Math.PI / 2;
+  add(torso, new THREE.TorusGeometry(0.06, 0.022, 8, 16), teamMat, 0, 0.47, 0).rotation.x = Math.PI / 2;
+  add(torso, new THREE.SphereGeometry(0.2, 24, 18), new THREE.MeshStandardMaterial({ color:0xf4f1ea, roughness:0.5 }), 0, 0.66, 0);
+  const face = new THREE.Mesh(new THREE.CircleGeometry(0.17, 24), new THREE.MeshBasicMaterial({ map:faceTexture(look.face), transparent:true }));
+  face.position.set(0, 0.66, 0.201); torso.add(face);
+  const parts = [torso];
+  for (const def of LIMBS) {
+    const u = new THREE.Group(), l = new THREE.Group(), hu = def.up / 2, hl = def.lo / 2;
+    rod(u, 0.03, hu, -hu); add(u, new THREE.SphereGeometry(0.035, 8, 6), ink, 0, -hu, 0);
+    rod(l, 0.03, hl, -hl + (def.arm ? 0.06 : 0));
+    if (def.arm) add(l, new THREE.SphereGeometry(0.09, 12, 10), teamMat, 0, -hl, 0.01);
+    else add(l, new THREE.BoxGeometry(0.1, 0.05, 0.2), ink, 0, -hl + 0.02, 0.05);
+    parts.push(u, l);
+  }
+  parts.forEach(m => scene.add(m));
+  return parts;
+}
 // Visual-only: physics stays the simple box-and-stick rig, so these meshes must keep the same pivots and lengths.
 function fighterMeshes(idx, look) {
+  if (look.body === 'stick') return stickMeshes(idx, look);
   const M = (color, rough = 0.6, extra) => new THREE.MeshStandardMaterial({ color, roughness: rough, ...extra });
   const race = look.race, team = colorOf(idx);
   const skin = M(RACES[race].skins[look.skin], race === 'beast' ? 0.95 : 0.55), shirt = M(team.team, 0.7), shorts = M(team.shorts, 0.8);
@@ -555,7 +603,7 @@ function fighterMeshes(idx, look) {
   const ball = (r, w = 14, h = 10) => new THREE.SphereGeometry(r, w, h);
   const cone = (r, h, mat, x, y, z, rx = 0, rz = 0) => { const c = add(torso, new THREE.ConeGeometry(r, h, 8), mat, x, y, z, false); c.rotation.set(rx, 0, rz); return c; };
   // Chest width, gut size and limb thickness per body type.
-  const B = { slim:{ w:0.86, gut:0.9, limb:0.88 }, average:{ w:1, gut:1, limb:1 }, heavy:{ w:1.14, gut:1.32, limb:1.16 } }[look.body];
+  const B = { slim:{ w:0.86, gut:0.9, limb:0.88 }, average:{ w:1, gut:1, limb:1 }, heavy:{ w:1.14, gut:1.32, limb:1.16 } }[look.body] || { w:1, gut:1, limb:1 };
   const bulk = race === 'beast' ? 1.08 : 1;
 
   const torso = new THREE.Group();
@@ -1261,7 +1309,7 @@ function swatchRow(el, colors, key, name) {
     return b;
   }));
 }
-function lookSummary(l) { return [RACES[l.race].label, BODIES[l.body], HAIRS[l.hair] + (l.hair === 'bald' ? '' : ' hair'), l.beard === 'none' ? 'clean-shaven' : BEARDS[l.beard].toLowerCase()].join(' · '); }
+function lookSummary(l) { if (l.body === 'stick') return [RACES[l.race].label, 'Stickman', FACES[l.face].toLowerCase() + ' face'].join(' · '); return [RACES[l.race].label, BODIES[l.body], HAIRS[l.hair] + (l.hair === 'bald' ? '' : ' hair'), l.beard === 'none' ? 'clean-shaven' : BEARDS[l.beard].toLowerCase()].join(' · '); }
 function renderCloset() {
   chipRow($('optRace'), Object.fromEntries(Object.entries(RACES).map(([k, r]) => [k, r.label])), 'race');
   chipRow($('optBody'), BODIES, 'body');
@@ -1270,6 +1318,11 @@ function renderCloset() {
   swatchRow($('optSkin'), RACES[myLook.race].skins, 'skin', myLook.race === 'beast' ? 'Fur color' : 'Skin tone');
   swatchRow($('optHc'), HAIR_COLORS, 'hc', 'Hair color');
   $('skinLabel').textContent = myLook.race === 'beast' ? 'Fur' : 'Skin';
+  // A stickman has a drawn face instead of skin, hair and facial hair.
+  const stick = myLook.body === 'stick';
+  chipRow($('optFace'), FACES, 'face');
+  $('optFace').parentElement.hidden = !stick;
+  for (const id of ['optSkin', 'optHair', 'optHc', 'optBeard']) $(id).parentElement.hidden = stick;
   $('raceNote').textContent = RACE_NOTES[myLook.race];
 }
 function lookChanged() {

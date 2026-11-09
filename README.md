@@ -39,7 +39,7 @@ In team matches there is no friendly fire: teammates can bump each other, but hi
 Open **Customize** from the menu to change your fighter. Your look is saved in your browser and sent to your opponent online.
 
 - **Race**: Human, Alien (same stats as Human), or Beast (hits about 30% harder and grabs harder, but walks about 22% slower).
-- **Body**: slim, average, or heavy (looks only).
+- **Body**: slim, average, heavy, or stickman (looks only). Stickmen pick a drawn face instead of hair and skin: smile, grin, angry, shocked, cool, sleepy, or X-eyes.
 - **Hair**: bald, buzz, short, spiky, mohawk, afro, or long, in seven colors.
 - **Facial hair**: none, stubble, mustache, goatee, or full beard.
 - **Skin or fur**: five tones per race.
