@@ -371,7 +371,7 @@ class Fighter {
       L.heldT = 0;
     }
     for (const b of this.all) { b.velocity.set(0,0,0); b.angularVelocity.set(0,0,0); b.force.set(0,0,0); b.torque.set(0,0,0); }
-    this.hp = 100; this.ko = false; this.out = false; this.stun = 0; this.downed = 0; this.grabCool = 0; this.reachT = 0;
+    this.hp = 100; this.ko = false; this.out = false; this.hitBy = null; this.stun = 0; this.downed = 0; this.grabCool = 0; this.reachT = 0;
   }
   step(inp, dt) {
     const T = this.torso;
@@ -488,6 +488,48 @@ sun.shadow.mapSize.set(1024, 1024);
 Object.assign(sun.shadow.camera, { left:-9, right:9, top:9, bottom:-9, near:1, far:30 });
 scene.add(sun);
 
+// ---------- mesh baking ----------
+// Every solid colour part shares this material: colour, roughness and metalness ride on the vertices so a whole body part is one draw call.
+const partMat = new THREE.MeshStandardMaterial({ vertexColors: true });
+partMat.userData.shared = true;
+partMat.onBeforeCompile = sh => {
+  sh.vertexShader = 'attribute vec2 rm;\nvarying vec2 vRM;\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n\tvRM = rm;');
+  sh.fragmentShader = 'varying vec2 vRM;\n' + sh.fragmentShader
+    .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = vRM.x;')
+    .replace('#include <metalnessmap_fragment>', 'float metalnessFactor = vRM.y;');
+};
+// Without a distinct key three would reuse the plain standard shader program, which has no rm attribute.
+partMat.customProgramCacheKey = () => 'part-rm';
+// Folds a group's plain-coloured child meshes into one mesh; textured or see-through children are kept as children of it.
+function bake(group, shadow = true) {
+  const pos = [], nor = [], col = [], rm = [], idx = [], keep = [], v = new THREE.Vector3(), nm = new THREE.Matrix3();
+  for (const c of group.children) {
+    const m = c.material;
+    if (!c.isMesh || !m.isMeshStandardMaterial || m.map || m.transparent) { keep.push(c); continue; }
+    c.updateMatrix(); nm.getNormalMatrix(c.matrix);
+    const g = c.geometry, P = g.attributes.position, N = g.attributes.normal, base = pos.length / 3;
+    for (let i = 0; i < P.count; i++) {
+      v.fromBufferAttribute(P, i).applyMatrix4(c.matrix); pos.push(v.x, v.y, v.z);
+      v.fromBufferAttribute(N, i).applyMatrix3(nm).normalize(); nor.push(v.x, v.y, v.z);
+      col.push(m.color.r, m.color.g, m.color.b); rm.push(m.roughness, m.metalness);
+    }
+    if (g.index) for (let i = 0; i < g.index.count; i++) idx.push(base + g.index.getX(i));
+    else for (let i = 0; i < P.count; i++) idx.push(base + i);
+    g.dispose(); if (!m.userData.shared) m.dispose();
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  geo.setAttribute('rm', new THREE.Float32BufferAttribute(rm, 2));
+  geo.setIndex(idx);
+  const out = new THREE.Mesh(geo, partMat);
+  out.position.copy(group.position); out.quaternion.copy(group.quaternion); out.scale.copy(group.scale);
+  out.castShadow = out.receiveShadow = shadow; out.visible = group.visible; out.userData = group.userData;
+  for (const c of keep) out.add(c);
+  return out;
+}
+
 function matTexture() {
   const c = document.createElement('canvas'); c.width = c.height = 512;
   const g = c.getContext('2d');
@@ -503,8 +545,8 @@ function matTexture() {
 const mat = new THREE.Mesh(new THREE.BoxGeometry(PLAT*2, 1, PLAT*2),
   [0,1,2,3,4,5].map(i => i === 2 ? new THREE.MeshStandardMaterial({ map: matTexture(), roughness: 0.9 }) : new THREE.MeshStandardMaterial({ color: 0x23302f, roughness: 0.9 })));
 mat.position.y = -0.5; mat.receiveShadow = true; scene.add(mat);
-const ring = new THREE.Group();
-{
+const ring = bake((() => {
+  const ring = new THREE.Group();
   const postMat = new THREE.MeshStandardMaterial({ color: 0xd8d2c4, roughness: 0.5 });
   const padMats = [0xe2553d, 0x3d8be2, 0xe2553d, 0x3d8be2].map(c => new THREE.MeshStandardMaterial({ color: c, roughness: 0.6 }));
   const ropeMat = new THREE.MeshStandardMaterial({ color: 0xf3efe6, roughness: 0.4 });
@@ -524,8 +566,9 @@ const ring = new THREE.Group();
       rope.castShadow = true; ring.add(rope);
     }
   }
-  ring.visible = false; scene.add(ring);
-}
+  return ring;
+})());
+ring.visible = false; scene.add(ring);
 // ---------- junkyard visuals ----------
 function canvasTex(w, h, draw) { const c = document.createElement('canvas'); c.width = w; c.height = h; draw(c.getContext('2d'), w, h); const t = new THREE.CanvasTexture(c); t.anisotropy = 4; return t; }
 const rustTex = canvasTex(256, 256, (g, w, h) => {
@@ -558,8 +601,9 @@ const rollers = [0.6, -0.6].map((z, k) => {
     const t = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.16, 0.08), tooth), a = i / 10 * Math.PI * 2 + j * 0.3;
     t.position.set(-PIT + 0.3 + j * (PIT * 2 - 0.6) / 3, Math.cos(a) * 0.4, Math.sin(a) * 0.4); t.rotation.x = -a; g.add(t);
   }
-  g.position.set(0, -1.05, z); g.userData.dir = k ? -1 : 1; junkVis.add(g);
-  return g;
+  const r = bake(g, false);
+  r.position.set(0, -1.05, z); r.userData.dir = k ? -1 : 1; junkVis.add(r);
+  return r;
 });
 junkVis.visible = false; scene.add(junkVis);
 
@@ -580,11 +624,12 @@ const props = PROP_SPOTS.map(([x, z, kind]) => {
   let mesh;
   if (crate) mesh = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.52, 0.52), new THREE.MeshStandardMaterial({ map: crateTex, roughness: 0.8 }));
   else {
-    mesh = new THREE.Group();
-    mesh.add(new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.68, 16), new THREE.MeshStandardMaterial({ color: 0xb03a2e, roughness: 0.55, metalness: 0.3 })));
-    for (const y of [-0.2, 0.2]) { const band = new THREE.Mesh(new THREE.CylinderGeometry(0.228, 0.228, 0.04, 16), new THREE.MeshStandardMaterial({ color: 0x2b2f3a, roughness: 0.5 })); band.position.y = y; mesh.add(band); }
+    const g = new THREE.Group();
+    g.add(new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.68, 16), new THREE.MeshStandardMaterial({ color: 0xb03a2e, roughness: 0.55, metalness: 0.3 })));
+    for (const y of [-0.2, 0.2]) { const band = new THREE.Mesh(new THREE.CylinderGeometry(0.228, 0.228, 0.04, 16), new THREE.MeshStandardMaterial({ color: 0x2b2f3a, roughness: 0.5 })); band.position.y = y; g.add(band); }
+    mesh = bake(g);
   }
-  mesh.traverse(c => { c.castShadow = true; c.receiveShadow = true; });
+  mesh.castShadow = mesh.receiveShadow = true;
   mesh.visible = false; scene.add(mesh);
   const prop = { body, mesh, kind, home: [x, z], he, thrownBy: null, thrownT: 0, cool: 0, grindT: 0 };
   body.prop = prop;
@@ -601,25 +646,29 @@ const props = PROP_SPOTS.map(([x, z, kind]) => {
 const propPose = props.map(() => ({ p: new THREE.Vector3(), q: new THREE.Quaternion(), tp: new THREE.Vector3(), tq: new THREE.Quaternion(), has: false }));
 
 // ---------- bomb vest ----------
-const vestMesh = new THREE.Group();
-{
+const vestMesh = bake((() => {
+  const vestMesh = new THREE.Group();
   const cloth = new THREE.MeshStandardMaterial({ color: 0x4a5236, roughness: 0.9 }), stick = new THREE.MeshStandardMaterial({ color: 0xc8402e, roughness: 0.6 }), tape = new THREE.MeshStandardMaterial({ color: 0x2b2f3a, roughness: 0.7 });
   const body = new THREE.Mesh(new THREE.BoxGeometry(0.66, 0.52, 0.42), cloth); vestMesh.add(body);
   for (let i = -2; i <= 2; i++) { const d = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.36, 10), stick); d.position.set(i * 0.11, 0.02, 0.24); vestMesh.add(d); }
   for (const y of [-0.1, 0.12]) { const t = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.04, 0.04), tape); t.position.set(0, y, 0.27); vestMesh.add(t); }
   vestMesh.userData.light = new THREE.Mesh(new THREE.SphereGeometry(0.05, 10, 8), new THREE.MeshBasicMaterial({ color: 0xff3020 }));
   vestMesh.userData.light.position.set(0.18, 0.2, 0.3); vestMesh.add(vestMesh.userData.light);
-  vestMesh.traverse(c => { c.castShadow = true; });
-  vestMesh.visible = false; scene.add(vestMesh);
-}
+  vestMesh.userData.light.castShadow = true;
+  return vestMesh;
+})());
+vestMesh.visible = false; scene.add(vestMesh);
 const vestRing = new THREE.Mesh(new THREE.RingGeometry(0.55, 0.75, 32), new THREE.MeshBasicMaterial({ color: 0xff7a2e, transparent: true, opacity: 0.7, side: THREE.DoubleSide }));
 vestRing.rotation.x = -Math.PI / 2; vestRing.position.y = 0.03; vestRing.visible = false; scene.add(vestRing);
 
-const pillarMat = new THREE.MeshStandardMaterial({ color: 0x232a3a, roughness: 1 });
-for (let i = 0; i < 10; i++) {
-  const a = i / 10 * Math.PI * 2, h = 6 + (i * 7 % 5) * 2;
-  const p = new THREE.Mesh(new THREE.BoxGeometry(1.4, h, 1.4), pillarMat);
-  p.position.set(Math.cos(a) * 18, h/2 - 12, Math.sin(a) * 18); scene.add(p);
+{
+  const pillars = new THREE.Group(), pillarMat = new THREE.MeshStandardMaterial({ color: 0x232a3a, roughness: 1 });
+  for (let i = 0; i < 10; i++) {
+    const a = i / 10 * Math.PI * 2, h = 6 + (i * 7 % 5) * 2;
+    const p = new THREE.Mesh(new THREE.BoxGeometry(1.4, h, 1.4), pillarMat);
+    p.position.set(Math.cos(a) * 18, h/2 - 12, Math.sin(a) * 18); pillars.add(p);
+  }
+  scene.add(bake(pillars, false));
 }
 
 // ---------- looks ----------
@@ -642,7 +691,7 @@ const FFA = [
 ];
 // Slot i is on team i % 2 in 1v1 and 2v2; in free-for-all every slot is its own team.
 // ctl per slot: local (this keyboard), cpu, dummy, seat (an online friend, or a stand-in while the seat is empty), net (guest view).
-const roster = { n:2, ctl:['cpu','cpu'], ffa:false };
+const roster = { n:2, ctl:['cpu','cpu'], ffa:false, list:F.slice(0, 2) };
 const colorOf = idx => roster.ffa ? FFA[idx] : TEAMS[idx % 2];
 const hex = c => '#' + c.toString(16).padStart(6, '0');
 const pickKey = (obj, v, d) => Object.prototype.hasOwnProperty.call(obj, v) ? v : d;
@@ -701,7 +750,6 @@ function stickMeshes(idx, look) {
     else add(l, new THREE.BoxGeometry(0.1, 0.05, 0.2), ink, 0, -hl + 0.02, 0.05);
     parts.push(u, l);
   }
-  parts.forEach(m => scene.add(m));
   return parts;
 }
 // Visual-only: physics stays the simple box-and-stick rig, so these meshes must keep the same pivots and lengths.
@@ -828,26 +876,17 @@ function fighterMeshes(idx, look) {
     }
     parts.push(u, l);
   }
-  parts.forEach(p => scene.add(p));
   return parts;
 }
 const meshes = new Array(PER * 10);
-function disposeTree(o) { o.traverse(c => { if (c.geometry) c.geometry.dispose(); if (c.material) c.material.dispose(); }); }
+function disposeTree(o) { o.traverse(c => { if (c.geometry) c.geometry.dispose(); if (c.material && !c.material.userData.shared) c.material.dispose(); }); }
 // Rebuilds one fighter's meshes and applies its race stats; physics bodies are untouched.
 function dress(i, look) {
   look = cleanLook(look);
   F[i].look = look; F[i].power = RACES[look.race].power; F[i].speed = RACES[look.race].speed;
   for (let k = 0; k < PER; k++) { const m = meshes[i * PER + k]; if (m) { scene.remove(m); disposeTree(m); } }
-  fighterMeshes(i, look).forEach((m, k) => { meshes[i * PER + k] = m; });
-  if (roster.n >= 6) slimShadows(i);
-}
-// In six-fighter brawls only the big shapes cast shadows; the small details roughly double the shadow pass's draw calls for little visible gain.
-function slimShadows(i) {
-  for (let k = 0; k < PER; k++) meshes[i * PER + k].traverse(c => {
-    if (!c.isMesh) return;
-    if (!c.geometry.boundingSphere) c.geometry.computeBoundingSphere();
-    if (c.geometry.boundingSphere.radius * Math.max(c.scale.x, c.scale.y, c.scale.z) < (roster.n >= 8 ? 0.2 : 0.13)) c.castShadow = false;
-  });
+  // Fresh meshes default to visible, and the frame loop only places fighters in the lineup, so benched ones must start hidden.
+  fighterMeshes(i, look).forEach((g, k) => { const m = meshes[i * PER + k] = bake(g); m.visible = i < roster.n; scene.add(m); });
 }
 const allBodies = F.flatMap(f => f.all);
 let myLook = (() => {
@@ -876,6 +915,32 @@ function resize() {
   renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix();
 }
 addEventListener('resize', resize); resize();
+
+// Dynamic resolution: a slow GPU gets fewer pixels rather than a choppy fight.
+const RES_LEVELS = [1, 0.85, 0.7, 0.55];
+const res = { cap:1.25, level:0, minLevel:0, sum:0, n:0, good:0, before:0, rose:false, off:false };
+function applyPixelRatio() { renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, res.cap) * RES_LEVELS[res.level]); }
+function resetResolution() { Object.assign(res, { level:0, minLevel:0, sum:0, n:0, good:0, before:0, rose:false, off:false }); applyPixelRatio(); }
+function adaptResolution(ms) {
+  // Long gaps are tab switches or hitches, not steady load.
+  if (res.off || ms > 250) return;
+  res.sum += ms; res.n++;
+  if (res.sum < 2000) return;
+  const avg = res.sum / res.n; res.sum = res.n = 0;
+  // A drop that didn't help means pixels aren't the bottleneck (a 30 Hz cap, battery saver, a slow CPU), so restore them and stop.
+  if (res.before) {
+    const helped = avg < res.before * 0.9; res.before = 0;
+    if (!helped) { res.level--; res.off = true; applyPixelRatio(); return; }
+  }
+  if (avg > 22 && res.level < RES_LEVELS.length - 1) {
+    // Struggling right after a step up means that level is too much for this device; don't try it again this match.
+    if (res.rose) res.minLevel = res.level + 1;
+    res.level++; res.before = avg; res.good = 0; res.rose = false; applyPixelRatio();
+  } else if (avg < 18) {
+    if (++res.good >= 3) res.rose = false;
+    if (res.good >= 6 && res.level > res.minLevel) { res.level--; res.good = 0; res.rose = true; applyPixelRatio(); }
+  }
+}
 
 // ---------- sound ----------
 let actx = null;
@@ -921,7 +986,8 @@ function decodeInput(o) {
 // ---------- lineup ----------
 let format = '1v1';
 const seats = {};
-const lineup = () => F.slice(0, roster.n);
+// Read many times per physics step, so it's rebuilt only when the roster changes; callers must not mutate it.
+const lineup = () => roster.list;
 function spawnOf(i) {
   if (roster.ffa) {
     const r = roster.n > 6 ? 4.8 : 3.4, a = i / roster.n * Math.PI * 2, x = Math.sin(a) * r, z = Math.cos(a) * r;
@@ -939,10 +1005,10 @@ function setRoster(ctl, ffa = false) {
   world.broadphase = roster.n <= 2 ? new CANNON.NaiveBroadphase() : new CANNON.SAPBroadphase(world);
   // Six fighters: refresh shadows every other frame and keep pixel density at 1 to protect the frame rate.
   renderer.shadowMap.autoUpdate = roster.n < 6;
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, roster.n >= 6 ? 1 : 1.25));
+  res.cap = roster.n >= 6 ? 1 : 1.25; applyPixelRatio();
+  roster.list = F.slice(0, roster.n);
   F.forEach((f, i) => {
     f.team = ffa ? i : i % 2;
-    if (roster.n >= 6 && i < roster.n) slimShadows(i);
     if (recolor && i < roster.n && f.look) dress(i, f.look);
     if (i >= roster.n) { for (const g of F) if (g.grab && (g === f || g.grab.body.fighter === f)) releaseGrab(g, 0); f.deactivate(); }
     for (let k = 0; k < PER; k++) meshes[i * PER + k].visible = i < roster.n;
@@ -959,46 +1025,215 @@ function nearestEnemy(i) {
 const heldBy = f => lineup().find(a => a.grab && a.grab.body.fighter === f);
 
 // ---------- CPU ----------
-const ai = F.map((f, i) => i % 2 ? Math.PI : 0).map(yaw => ({ yaw, t:1, hold:0, key:null, grabT:0, grabLen:0, letGo:0, takedown:false, mashT:0, mashOn:false, mashKey:'la' }));
-function aiInput(i, dt) {
-  const s = ai[i], tgt = nearestEnemy(i);
-  const inp = { yaw: s.yaw };
-  if (!tgt) return inp;
-  const me = F[i].torso.position, op = tgt.torso.position;
-  let want = Math.atan2(op.x - me.x, op.z - me.z);
-  // Steer round the grinder instead of walking straight into it.
-  if (arena === 'junk') {
-    const ax = me.x + Math.sin(want) * 1.3, az = me.z + Math.cos(want) * 1.3;
-    if (Math.abs(ax) < PIT + 0.5 && Math.abs(az) < PIT + 0.5) want += (me.x * Math.cos(want) - me.z * Math.sin(want) > 0 ? -1 : 1) * 1.1;
+// Each CPU rolls a temperament every round, so CPU-only fights don't all play out the same way.
+function newBrain(yaw) {
+  return { yaw, tgt:null, tgtT:0, foeHp:100, lastHp:100, quiet:0, plan:'wait', planT:0, pressT:0, combo:0, key:null, hold:0, gap:0, lastArm:'ra',
+    grabT:0, grabLen:0, letGo:0, takedown:false, mashT:0, mashOn:false, mashKey:'la', cd:{ gr:0, pd:0 }, dodgeT:0, sawSwing:false, prop:null, propT:0, fetchT:0, fetchCd:0, escT:0,
+    side:Math.random() < 0.5 ? 1 : -1, aggr:0.45 + Math.random() * 0.5, dodge:0.15 + Math.random() * 0.4, kicky:Math.random(), grabby:Math.random(),
+    junky:0.4 + Math.random() * 0.6, kamikaze:Math.random() < 0.3 };
+}
+const ai = F.map((f, i) => newBrain(i % 2 ? Math.PI : 0));
+const isHuman = f => roster.ctl[f.idx] === 'local' || roster.ctl[f.idx] === 'seat' && !!(seats[f.idx] && seats[f.idx].peer);
+// Distance to the nearest place a fighter can lose by falling (mat edge in Classic, the grinder pit), with n pointing toward it.
+function hazard(x, z) {
+  let d = Infinity, nx = 0, nz = 0;
+  const ax = Math.abs(x), az = Math.abs(z);
+  if (gameMode !== 'ko') { if (ax > az) { d = PLAT - ax; nx = Math.sign(x); } else { d = PLAT - az; nz = Math.sign(z); } }
+  if (arena === 'junk' && Math.max(ax, az) - PIT < d) { d = Math.max(ax, az) - PIT; nx = nz = 0; if (ax > az) nx = -Math.sign(x); else nz = -Math.sign(z); }
+  return { d, nx, nz };
+}
+function unsafeAt(x, z, avoidVest) {
+  if (hazard(x, z).d < 0.4) return true;
+  return avoidVest && vest.state === 1 && Math.hypot(x - vest.x, z - vest.z) < 0.9;
+}
+function pickTarget(i, s) {
+  const me = F[i], p = me.torso.position, piled = new Map();
+  for (const f of lineup()) if (f !== me && f.team === me.team && alive(f) && roster.ctl[f.idx] === 'cpu' && ai[f.idx].tgt) piled.set(ai[f.idx].tgt, (piled.get(ai[f.idx].tgt) || 0) + 1);
+  let best = null, bs = Infinity;
+  for (const f of enemiesOf(me)) {
+    const q = f.torso.position;
+    // Closer, weaker, already-chosen and revenge targets win; allies spread out instead of all mobbing one fighter.
+    let sc = Math.hypot(q.x - p.x, q.z - p.z) + f.hp / 60 + (piled.get(f) || 0) * 1.2;
+    if (f === s.tgt) sc -= 1.5;
+    if (f === me.hitBy) sc -= 1.5;
+    // Turn on whoever is coming for you: chasing someone who is chasing someone else makes a loop where nobody catches anyone.
+    if (roster.ctl[f.idx] === 'cpu' && ai[f.idx].tgt === me) sc -= 1.5;
+    if (sc < bs) { bs = sc; best = f; }
   }
-  s.yaw = wrap(s.yaw + clamp(wrap(want - s.yaw), -3*dt, 3*dt));
-  inp.yaw = s.yaw;
-  const dist = Math.hypot(op.x - me.x, op.z - me.z);
-  if (heldBy(F[i])) {
+  return best;
+}
+function crowdTarget(me) {
+  let best = null, bc = -1;
+  for (const f of enemiesOf(me)) {
+    const q = f.torso.position, c = lineup().filter(g => g !== me && g !== f && alive(g) && Math.hypot(g.torso.position.x - q.x, g.torso.position.z - q.z) < 4).length;
+    if (c > bc) { bc = c; best = f; }
+  }
+  return best;
+}
+function aiInput(i, dt) {
+  const s = ai[i], me = F[i], P = me.torso.position, inp = { yaw: s.yaw };
+  for (const k in s.cd) s.cd[k] -= dt;
+  const tap = k => { if (s.cd[k] <= 0) { inp[k] = true; s.cd[k] = 0.7; } };
+  const toward = (x, z) => Math.atan2(x - P.x, z - P.z);
+  const distTo = (x, z) => Math.hypot(x - P.x, z - P.z);
+  let want = s.yaw, move = 0, avoidVest = true, close = false;
+  const finish = () => {
+    // Steer round hazards only while travelling: up close it would circle a foe standing by the edge forever, so there it just stops short.
+    // A step already on the lip is fine as long as it heads away from the drop.
+    const here = hazard(P.x, P.z).d;
+    const stepOk = (dir, len) => { const x = P.x + Math.sin(dir) * len, z = P.z + Math.cos(dir) * len; return !unsafeAt(x, z, avoidVest) || hazard(x, z).d > here + 0.05; };
+    if (move > 0 && !close) {
+      const tries = [0, 0.5 * s.side, -0.5 * s.side, 1 * s.side, -1 * s.side, 1.6 * s.side, -1.6 * s.side, 2.2 * s.side, -2.2 * s.side];
+      const ok = tries.find(o => stepOk(want + o, 0.5) && stepOk(want + o, 1.2));
+      if (ok !== undefined) want += ok;
+    }
+    s.yaw = wrap(s.yaw + clamp(wrap(want - s.yaw), -3.2 * dt, 3.2 * dt));
+    inp.yaw = s.yaw;
+    // Walking while still turning swings a CPU wide, and two of them doing it orbit each other forever, so turn first.
+    const aimed = Math.abs(wrap(want - s.yaw)) < 0.6;
+    if (move > 0 && aimed && stepOk(s.yaw, 0.5)) inp.fw = true;
+    if (move < 0 && aimed && stepOk(s.yaw + Math.PI, 0.5)) inp.bk = true;
+    return inp;
+  };
+  s.quiet += dt;
+  if (me.hp < s.lastHp) s.quiet = 0;
+  s.lastHp = me.hp;
+  if ((s.tgtT -= dt) <= 0 || !s.tgt || !alive(s.tgt)) {
+    s.tgt = pickTarget(i, s); s.tgtT = 0.5 + Math.random() * 0.5;
+    if (s.tgt) s.foeHp = s.tgt.hp;
+  }
+  const tgt = s.tgt;
+  if (!tgt) return inp;
+  if (tgt.hp < s.foeHp) s.quiet = 0;
+  s.foeHp = tgt.hp;
+  if (heldBy(me)) {
     // About two presses a second: a human grabber can still land a takedown if they commit to it quickly.
     s.mashT -= dt;
     if (s.mashT <= 0) { s.mashOn = !s.mashOn; s.mashT = 0.15 + Math.random() * 0.2; if (s.mashOn) s.mashKey = ['la','ra','ll','rl'][Math.floor(Math.random() * 4)]; }
     if (s.mashOn) inp[s.mashKey] = true;
     return inp;
   }
+
+  // The blast hits everyone, allies included, so wearers go where the most fighters are and everyone else scatters.
+  const wearer = vest.state === 2 ? F[vest.wearer] : null;
+  if (wearer === me) {
+    const c = crowdTarget(me) || tgt, q = c.torso.position;
+    want = toward(q.x, q.z); move = 1;
+    if (!me.grab && distTo(q.x, q.z) < 1) tap('gr');
+    return finish();
+  }
+  if (wearer && wearer.active && distTo(wearer.torso.position.x, wearer.torso.position.z) < 6.5) {
+    const w = wearer.torso.position;
+    want = Math.atan2(P.x - w.x, P.z - w.z); move = 1;
+    if (me.grab) tap('gr');
+    return finish();
+  }
+  if (vest.state === 1 && s.kamikaze && me.hp < 40) {
+    avoidVest = false; want = toward(vest.x, vest.z); move = 1;
+    return finish();
+  }
+
+  const q = tgt.torso.position, d = distTo(q.x, q.z);
+  if (me.grab && me.grab.prop) {
+    s.propT += dt; s.prop = null;
+    want = toward(q.x, q.z); move = d < 1.6 ? -1 : d > 7 ? 1 : 0;
+    if (Math.abs(wrap(want - s.yaw)) < 0.15 && d < 7 || s.propT > 4) tap('pd');
+    return finish();
+  }
+  s.propT = 0;
+  s.fetchCd -= dt;
+  if (arena === 'junk' && !me.grab && !s.prop && s.grabT <= 0 && d > 2.2 && s.fetchCd <= 0 && s.quiet < 5 && Math.random() < dt * s.junky) {
+    let bd = Math.min(4, d - 0.5);
+    for (const pr of props) {
+      const b = pr.body.position, pd = distTo(b.x, b.z);
+      if (pd < bd && b.y > -0.3 && !inPit(b.x, b.z) && !pr.thrownBy && !lineup().some(f => f.grab && f.grab.prop === pr)) { bd = pd; s.prop = pr; s.fetchT = 0; }
+    }
+  }
+  if (s.prop) {
+    const pr = s.prop, b = pr.body.position, pd = distTo(b.x, b.z);
+    // A foe closing in means fight now; a fetch that keeps failing would otherwise repeat forever with the foe in tow.
+    if ((s.fetchT += dt) > 3.5 || d < 1.8 || b.y < -0.3 || lineup().some(f => f.grab && f.grab.prop === pr)) { s.prop = null; s.fetchCd = 3; }
+    else {
+      want = toward(b.x, b.z); move = pd > 0.75 ? 1 : 0;
+      if (pd < 1 && Math.abs(wrap(want - s.yaw)) < 0.35) tap('gr');
+      return finish();
+    }
+  }
+
+  // Grab is a toggle, so the CPU taps once to go in and taps again when it's done holding.
   if (s.grabT > 0) {
-    // Grab is a toggle, so the CPU taps once to go in and taps again when it's done holding.
-    s.grabT -= dt; inp.gr = s.grabT > s.grabLen - 0.1;
-    if (dist > 0.8) inp.fw = true;
-    if (F[i].grab && s.takedown) inp.pd = true;
-    if (s.grabT <= 0 && F[i].grab) s.letGo = 0.1;
-    return inp;
+    s.grabT -= dt; want = toward(q.x, q.z);
+    if (s.grabT > s.grabLen - 0.1) inp.gr = true;
+    if (d > 0.8) move = 1;
+    if (me.grab && s.takedown) inp.pd = true;
+    if (s.grabT <= 0 && me.grab) s.letGo = 0.1;
+    return finish();
   }
-  if (s.letGo > 0) { s.letGo -= dt; if (F[i].grab) inp.gr = true; return inp; }
-  if (dist < 1.3 && s.hold <= 0 && Math.random() < dt * 0.35) { s.grabLen = s.grabT = 1.6 + Math.random() * 1.2; s.takedown = Math.random() < 0.6; return inp; }
-  if (dist > 1.5) inp.fw = true; else if (dist < 0.9) inp.bk = true;
-  s.t -= dt;
-  if (s.hold > 0) { s.hold -= dt; inp[s.key] = true; }
-  else if (s.t <= 0 && dist < 2.3) {
-    s.key = ['la','ra','la','ra','ll','rl'][Math.floor(Math.random() * 6)];
-    s.hold = 0.22; s.t = 0.45 + Math.random() * 0.9;
+  if (s.letGo > 0) { s.letGo -= dt; if (me.grab) inp.gr = true; return finish(); }
+
+  const vsHuman = isHuman(tgt);
+  // Boredom: the longer nobody lands anything, the bolder the CPU gets, which is what breaks CPU-vs-CPU standoffs.
+  // Against people the CPU is calmer, with shorter combos and longer pauses, so there are openings to learn from.
+  const aggr = Math.min(1, s.aggr + clamp(s.quiet / 6, 0, 1) * 0.5) * (vsHuman ? 0.7 : 1);
+  want = toward(q.x, q.z);
+
+  // React once to each of the target's swings: back out of range, or swing back.
+  const swinging = tgt.limbs.some(L => L.striking);
+  if (swinging && !s.sawSwing && d < 1.2 && s.plan !== 'press') {
+    if (Math.random() < s.dodge * (vsHuman ? 0.6 : 1)) s.dodgeT = 0.3;
+    else if (Math.random() < aggr * 0.5) { s.plan = 'press'; s.combo = 1; s.pressT = 0; }
   }
-  return inp;
+  s.sawSwing = swinging;
+  if (s.dodgeT > 0) { s.dodgeT -= dt; move = -1; return finish(); }
+
+  if (d > 1.7) {
+    s.plan = 'wait'; s.planT = Math.min(s.planT, 0.3);
+    move = 1;
+    // Come at a foe near an edge or the pit from the safe side, so hits knock them toward it.
+    // Only whoever is on the outside flanks (otherwise two CPUs orbit each other), and boredom gives it up.
+    const th = hazard(q.x, q.z), inside = (P.x - q.x) * -th.nx + (P.z - q.z) * -th.nz > 0;
+    if (th.d < 2.5 && !inside && s.quiet < 4) { const ax = q.x - th.nx * 1.1, az = q.z - th.nz * 1.1; if (distTo(ax, az) > 0.5) want = toward(ax, az); }
+  }
+  // Backed up against a hazard by a foe with more room: work back toward open ground before fighting.
+  // Only briefly, and not with the foe on top of us: running along the edge with someone in tow is just another loop.
+  const mh = hazard(P.x, P.z);
+  const cornered = d > 1.4 && mh.d < 1.2 && hazard(q.x, q.z).d > mh.d + 0.4 && s.quiet < 4 && s.escT < 1.5;
+  s.escT = cornered ? s.escT + dt : Math.max(0, s.escT - dt * 0.25);
+  if (cornered) {
+    want = Math.atan2(-mh.nx, -mh.nz) + 0.7 * s.side; move = 1;
+    return finish();
+  }
+  if (d > 1.7) return finish();
+  close = true;
+
+  if (s.plan === 'wait') {
+    move = d > 1.5 ? 1 : d < 1.15 ? -1 : 0;
+    if ((s.planT -= dt) <= 0) {
+      if (d < 1.1 && Math.random() < s.grabby * 0.3) {
+        s.grabLen = s.grabT = 1.2 + Math.random() * 1.2; s.takedown = Math.random() < 0.7;
+        s.planT = 0.3;
+      } else { s.plan = 'press'; s.combo = (vsHuman ? 1 : 2) + Math.floor(Math.random() * (vsHuman ? 2 : 3)); s.pressT = 0; }
+    }
+  }
+  if (s.plan === 'press') {
+    // Walk in while swinging: strikes land from about 0.6 to 1 m; farther swings hit air, closer ones jam with no speed behind them.
+    s.pressT += dt;
+    move = d > 0.85 ? 1 : d < 0.65 ? -1 : 0;
+    if (s.hold > 0) { s.hold -= dt; inp[s.key] = true; }
+    else if (s.gap > 0) s.gap -= dt;
+    else if (s.combo > 0 && d < 1.1) {
+      const kick = Math.random() < 0.2 + s.kicky * 0.3 + (hazard(q.x, q.z).d < 2 ? 0.3 : 0);
+      s.key = kick ? (Math.random() < 0.5 ? 'll' : 'rl') : (s.lastArm = s.lastArm === 'la' ? 'ra' : 'la');
+      s.hold = kick ? 0.32 : 0.2; s.gap = 0.08 + Math.random() * 0.15; s.combo--;
+      inp[s.key] = true;
+    }
+    if (s.combo <= 0 && s.hold <= 0 || s.pressT > 2.5) { s.plan = 'back'; s.planT = (0.25 + Math.random() * 0.6) * (1.3 - aggr); }
+  } else if (s.plan === 'back') {
+    // Give ground after a combo; this is the human's window to counter.
+    move = d < 1.35 ? -1 : 0;
+    if ((s.planT -= dt) <= 0) { s.plan = 'wait'; s.planT = (0.2 + Math.random() * 0.8) * (1.2 - aggr) + (vsHuman ? 0.5 : 0); }
+  }
+  return finish();
 }
 function idleInput(i) {
   const tgt = nearestEnemy(i);
@@ -1017,7 +1252,7 @@ function resetRound() {
     if (i >= roster.n) { f.deactivate(); return; }
     const s = spawnOf(i);
     f.activate(); f.reset(s.x, s.z, s.yaw);
-    localYaw[i] = s.yaw; ai[i].yaw = s.yaw;
+    localYaw[i] = s.yaw; ai[i] = newBrain(s.yaw);
   });
   resetProps(); resetVest();
   match.status = 'ready'; match.timer = 1.2; match.msg = 'ROUND ' + match.round;
@@ -1062,7 +1297,7 @@ function resolveHits() {
     const isTorso = h.body === D.torso;
     const head = isTorso && h.y > D.torso.position.y + 0.45;
     const dmg = Math.min(20, (h.v - 1.5) * 2.2) * (head ? 1.5 : isTorso ? 1 : 0.35) * (h.limb.arm ? 1 : 1.25) * A.power;
-    D.hp = Math.max(0, D.hp - dmg);
+    D.hp = Math.max(0, D.hp - dmg); D.hitBy = A;
     D.stun = Math.max(D.stun, 0.2 + dmg / 30);
     if (D.grab && D.grab.body.fighter === A) D.grab.grip -= dmg * 3;
     const dx = D.torso.position.x - A.torso.position.x, dz = D.torso.position.z - A.torso.position.z, n = Math.hypot(dx, dz) || 1;
@@ -1211,7 +1446,7 @@ function resolvePropHits() {
     const A = h.prop.thrownBy, D = h.def;
     if (!A || !alive(D) || A === D || A.team === D.team || match.status !== 'fight') continue;
     const dmg = Math.min(25, (h.v - 3) * 3) * A.power, vel = h.prop.body.velocity, n = Math.hypot(vel.x, vel.z) || 1;
-    D.hp = Math.max(0, D.hp - dmg); D.stun = Math.max(D.stun, 0.3 + dmg / 25);
+    D.hp = Math.max(0, D.hp - dmg); D.hitBy = A; D.stun = Math.max(D.stun, 0.3 + dmg / 25);
     D.torso.applyImpulse(new CANNON.Vec3(vel.x / n * (dmg * 5 + 20), dmg * 2, vel.z / n * (dmg * 5 + 20)), D.torso.position);
     if (D.hp <= 0) knockOut(D);
     match.hits++; match.hit = [h.x, h.y, h.z]; match.hitBig = dmg > 12;
@@ -1522,6 +1757,7 @@ async function start(m, c) {
   mode = solo[m] ? 'solo' : m;
   if (mode === 'host') format = hostFormat;
   localIdx = mode === 'guest' ? -1 : 0;
+  resetResolution();
   setRoster(solo[m] || (mode === 'host' ? hosted[format] : ['net', 'net']), m.startsWith('ffa') || mode === 'host' && format.startsWith('ffa'));
   if (mode === 'host') for (const i of SEAT_ORDER[format]) seats[i] = { peer:null, input:decodeInput(null), lookKey:'' };
   $('menu').hidden = true; $('menuBtn').hidden = false; $('legend').hidden = false;
@@ -1584,6 +1820,7 @@ $('arJunk').onclick = () => pickArena('junk');
 try { chosenArena = localStorage.getItem('bonk-arena') === 'junk' ? 'junk' : 'classic'; } catch (e) {}
 function toAttract() {
   mode = 'attract'; localIdx = 0; format = '1v1';
+  resetResolution();
   setArena(chosenArena);
   setRoster(['cpu', 'cpu'], false);
   dress(0, myLook); dress(1, randomLook()); newMatch();
@@ -1662,6 +1899,7 @@ function camIdx() {
   return 0;
 }
 function frame(now) {
+  adaptResolution(now - last);
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
   if (mode !== 'attract' && localIdx >= 0) {
     const turn = (keys.ArrowLeft ? 1 : 0) - (keys.ArrowRight ? 1 : 0);
